@@ -1,0 +1,4 @@
+# patches are applied to LF sources with git apply: keep them byte for byte
+*.patch -text
+# shell scripts run on macOS
+*.sh text eol=lf

@@ -1,0 +1,19 @@
+--- a/src/iohumdrum.cpp
++++ b/src/iohumdrum.cpp
+@@ -26961,6 +26961,16 @@
+                 }
+             }
+         }
++        else if (!showInAccid && loaccid.empty() && !cautionaryQ && !editorialQ && accidCount != 0) {
++            // PianoKit patch: an accidental implied by the key signature (or earlier in the bar) is not drawn,
++            // but it still has to sound: keep it as the performed (gestural) accidental.
++            switch (accidCount) {
++                case +2: accid->SetAccidGes(ACCIDENTAL_GESTURAL_ss); break;
++                case +1: accid->SetAccidGes(ACCIDENTAL_GESTURAL_s); break;
++                case -1: accid->SetAccidGes(ACCIDENTAL_GESTURAL_f); break;
++                case -2: accid->SetAccidGes(ACCIDENTAL_GESTURAL_ff); break;
++            }
++        }
+ 
+         if (!(editorialQ || cautionaryQ || subelementQ)) {
+             // No need for sub-element so make them attributes of the note:

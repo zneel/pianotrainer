@@ -1,0 +1,35 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{6C35492C-4B33-7726-B70A-4E84BDE9FC76}",
+	"Category": "",
+	"Description": "Learn any piece on the piano: Verovio sheet music, MIDI keyboard input, Harmonix sound, wait mode.",
+	"Modules": [
+		{
+			"Name": "PianoTrainer",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "PianoKit",
+			"Enabled": true
+		},
+		{
+			"Name": "Harmonix",
+			"Enabled": true
+		},
+		{
+			"Name": "Metasound",
+			"Enabled": true
+		},
+		{
+			"Name": "MIDIDevice",
+			"Enabled": true
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
+		}
+	]
+}

@@ -1,0 +1,26 @@
+# Unreal build output and caches
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+Packaged/
+.vs/
+*.sln
+Plugins/PianoKit/Binaries/
+Plugins/PianoKit/Intermediate/
+Content/Developers/
+Content/Collections/
+
+# Third-party sources and the libraries built from them:
+#   py -I tools/fetch_thirdparty.py, then ThirdParty/build_win64.bat (or build_mac.sh)
+ThirdParty/src/
+ThirdParty/build/
+Plugins/PianoKit/ThirdParty/Verovio/
+Plugins/PianoKit/ThirdParty/LunaSVG/
+Plugins/PianoKit/ThirdParty/Sfizz/
+
+# Salamander Grand Piano samples (~713 MB): py -I tools/fetch_salamander.py
+Plugins/PianoKit/ThirdParty/Salamander/*
+!Plugins/PianoKit/ThirdParty/Salamander/LICENSE.txt
+!Plugins/PianoKit/ThirdParty/Salamander/README.txt
