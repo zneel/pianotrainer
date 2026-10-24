@@ -182,8 +182,13 @@ namespace PianoKit::SequencerNode
 
 			const double Rate = FMath::Clamp<double>(Session->TempoScale.load(std::memory_order_relaxed), 0.1, 2.0);
 			const bool bPlaying = Session->bPlaying.load(std::memory_order_relaxed);
-			if (bPlaying && !bWasPlaying)
+			const bool bCountInRequest = Session->bCountInRequest.exchange(false, std::memory_order_relaxed);
+			if (bPlaying && (!bWasPlaying || bCountInRequest))
 			{
+				if (bWasPlaying && Sounding.Num() > 0)
+				{
+					AllAccompanimentOff(0); // nothing rings on under the clicks
+				}
 				CountInTotal = Session->CountInBeats.load(std::memory_order_relaxed);
 				CountInElapsedMs = 0.0;
 				bCountIn = CountInTotal > 0;

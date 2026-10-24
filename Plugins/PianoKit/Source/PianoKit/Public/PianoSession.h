@@ -104,6 +104,7 @@ public:
 	std::atomic<int32> CountInBeats{0};   // clicks before the music starts after Play
 	std::atomic<double> CountInBeatMs{500.0}; // beat length at the written tempo
 	std::atomic<int32> CountInLeft{0};    // published: clicks still to come (0 = playing)
+	std::atomic<bool> bCountInRequest{false}; // count in again while playing (the clock waits for the clicks)
 	std::atomic<float> InputLatencyMs{0.f}; // play-along judges presses this much earlier (keyboard + audio latency)
 
 	// Game thread -> audio thread.

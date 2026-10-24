@@ -13,6 +13,7 @@ void SSheetStrip::Construct(const FArguments& InArgs)
 {
 	Player = InArgs._Player;
 	WhiteBrush = *FCoreStyle::Get().GetBrush("GenericWhiteBox");
+	SetClipping(EWidgetClipping::ClipToBounds); // the loop shade and tiles reach past the edges as the score scrolls
 	OnScoreChanged();
 }
 
@@ -122,11 +123,14 @@ int32 SSheetStrip::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 	double LoopStart = 0.0, LoopEnd = 0.0;
 	if (P->GetLoop(LoopStart, LoopEnd))
 	{
-		const float X0 = OffsetX + Score->TimeToX(LoopStart) * Scale;
-		const float X1 = OffsetX + Score->TimeToX(LoopEnd) * Scale;
-		FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 2,
-			AllottedGeometry.ToPaintGeometry(FVector2f(X1 - X0, Size.Y), FSlateLayoutTransform(FVector2f(X0, 0.f))),
-			&WhiteBrush, ESlateDrawEffect::None, PianoStyle::LoopShade.CopyWithNewOpacity(0.35f));
+		const float X0 = FMath::Clamp(OffsetX + Score->TimeToX(LoopStart) * Scale, 0.f, Size.X);
+		const float X1 = FMath::Clamp(OffsetX + Score->TimeToX(LoopEnd) * Scale, 0.f, Size.X);
+		if (X1 > X0)
+		{
+			FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 2,
+				AllottedGeometry.ToPaintGeometry(FVector2f(X1 - X0, Size.Y), FSlateLayoutTransform(FVector2f(X0, 0.f))),
+				&WhiteBrush, ESlateDrawEffect::None, PianoStyle::LoopShade.CopyWithNewOpacity(0.35f));
+		}
 	}
 
 	// Notehead tints.

@@ -144,7 +144,7 @@ TSharedRef<SWidget> SPianoHome::MakeRail()
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 4.f, 0.f, 26.f))
 					[
-						SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint).Text(LOCTEXT("Tagline", "Learn any piece. Practise like Cortot."))
+						SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint).Text(LOCTEXT("Tagline", "Learn any piece, a small section at a time."))
 					]
 					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavHome", "Home"), PageHome)]
 					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavEtudes", "Études"), PageEtudes)]
@@ -195,14 +195,14 @@ TSharedRef<SWidget> SPianoHome::MakeHomePage()
 		LOCTEXT("ContinueB", "Pick up the piece you were practising, where you left it."),
 		TAttribute<FText>::CreateLambda([this]() { return ContinueLabel ? ContinueLabel() : FText::GetEmpty(); }), [this]() { if (OnContinue) { OnContinue(); } }, true)];
 	Grid->AddSlot(1, 0)[MakeCard(LOCTEXT("EtudesK", "LEARN"), LOCTEXT("EtudesT", "Chopin Études"),
-		LOCTEXT("EtudesB", "All 24 of Op. 10 and Op. 25 from the first editions, with drills after Cortot's working method: rhythms, impulses, block chords, moving accents."),
+		LOCTEXT("EtudesB", "All 24 of Op. 10 and Op. 25 from the first editions, with practice tools made from the score: outline, chord positions, rhythms, moving accents."),
 		LOCTEXT("EtudesF", "24 études"), [this]() { CurrentPage = PageEtudes; })];
 	Grid->AddSlot(2, 0)[MakeCard(LOCTEXT("OpenK", "YOUR MUSIC"), LOCTEXT("OpenT", "Open a score"),
 		LOCTEXT("OpenB", "MusicXML from MuseScore, MEI, Humdrum or ABC. Drop a file anywhere, or browse."),
 		LOCTEXT("OpenF", "Browse…"), [this]() { if (OnOpenFile) { OnOpenFile(); } })];
 
 	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()[PageTitle(LOCTEXT("HomeTitle", "What shall we play?"), LOCTEXT("HomeSub", "Practise a piece with its score scrolling above the keyboard: the music waits for you, plays the other hand, and loops the hard bars. Or work an étude the way Cortot taught it."))]
+		+ SVerticalBox::Slot().AutoHeight()[PageTitle(LOCTEXT("HomeTitle", "What shall we play?"), LOCTEXT("HomeSub", "Practise a piece with its score scrolling above the keyboard: the music waits for you, plays the other hand, and loops the hard bars. Make a plan and learn it section by section, the way Bernhard taught on Piano Street."))]
 		+ SVerticalBox::Slot().AutoHeight()[Grid]
 		+ SVerticalBox::Slot().AutoHeight()[SAssignNew(RecentBox, SBox)[MakeRecent()]];
 }
@@ -455,7 +455,7 @@ TSharedRef<SWidget> SPianoHome::MakeEtudeDetail()
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 18.f, 0.f, 6.f))
 				[
-					PianoHomeImpl::SectionLabel(LOCTEXT("DrillsFor", "DRILLS FOR THIS ÉTUDE"))
+					PianoHomeImpl::SectionLabel(LOCTEXT("DrillsFor", "TOOLS THAT SUIT THIS ÉTUDE"))
 				]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
@@ -477,7 +477,7 @@ TSharedRef<SWidget> SPianoHome::MakeEtudeDetail()
 				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 10.f, 0.f, 0.f))
 				[
 					SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint).AutoWrapText(true)
-					.Text(LOCTEXT("CortotNote", "Loop a few hard measures, step through the drills, then play them as written. The drills are generated from the score in the spirit of Cortot's working editions; his own exercises are still under copyright in Europe."))
+					.Text(LOCTEXT("PlanNote", "Make a plan in the practice screen's Plan tab and learn the étude section by section, hardest first. When a spot will not go, the Practice tab has a tool for what is going wrong; the tools are made from the score."))
 				]
 				+ SVerticalBox::Slot().FillHeight(1.f)[SNullWidget::NullWidget]
 				+ SVerticalBox::Slot().AutoHeight()

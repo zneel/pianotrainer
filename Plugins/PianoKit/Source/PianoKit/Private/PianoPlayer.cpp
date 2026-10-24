@@ -544,6 +544,24 @@ void UPianoPlayer::Play()
 	}
 }
 
+void UPianoPlayer::CountInAgain(double SongMs)
+{
+	if (!Session.IsValid() || !Score.IsValid())
+	{
+		return;
+	}
+	if (!IsPlaying() || CountInBars <= 0)
+	{
+		Play();
+		return;
+	}
+	Session->CountInBeatMs.store(CountInBeatMsAt(SongMs));
+	Session->CountInBeats.store(CountInBars * BeatsInMeasureAt(SongMs));
+	AutoplayCountInSeconds = FPlatformTime::Seconds();
+	Session->bCountInRequest.store(true);
+	LogLine(TEXT("countin"), INDEX_NONE, 0, SongMs, 0.f);
+}
+
 void UPianoPlayer::Pause()
 {
 	if (Session.IsValid() && Session->bPlaying.exchange(false))
@@ -889,6 +907,7 @@ void UPianoPlayer::Tick(float DeltaTime)
 					}
 				}
 				AutoplayNext = Algo::LowerBoundBy(PlayNotes, LoopStart - 0.5, &FPianoSessionNote::OnMs);
+				OnPassJudged.Broadcast();
 			}
 			break;
 		case EPianoFeedback::Finished:
@@ -967,7 +986,7 @@ void UPianoPlayer::Tick(float DeltaTime)
 			if ((uint8(Note.Hand) & Hands) != 0 && !Note.bTied && !GetListenMode())
 			{
 				++AutoplayCount;
-				const bool bMistake = AutoplayErrorEvery > 0 && AutoplayCount % AutoplayErrorEvery == 0;
+				const bool bMistake = AutoplayErrorEvery > 0 && AutoplayCount % AutoplayErrorEvery == 0 && (AutoplayErrorsUntil <= 0 || AutoplayCount <= AutoplayErrorsUntil);
 				const int32 Pitch = bMistake ? Note.Pitch + 1 : Note.Pitch;
 				NoteOn(Pitch, bAccentDrill ? (Note.bAccent ? 112 : 64) : 90);
 				AutoplayReleases.Add({ Note.OnMs + (Note.OffMs - Note.OnMs) * 0.9, Pitch });

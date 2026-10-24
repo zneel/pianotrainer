@@ -1,7 +1,7 @@
-// The settings panel on the right of the practice screen, with two tabs:
-//   Practice - guided practice (wait / play along / listen, hands, latency), count-in, Cortot-style drills,
-//              the section to loop, and the two hands' note counts.
-//   Plan     - the piece's practice plan after Bernhard (SPianoPlanPanel).
+// The panel on the right of the practice screen, with three tabs:
+//   Plan     - the piece's practice plan after Bernhard (SPianoPlanPanel); the first tab.
+//   Practice - how the app plays (wait / play along / listen, hands, latency), count-in, practice tools listed by
+//              what is going wrong (Bernhard: start from the problem), the section to loop, the two hands' notes.
 //   Visual   - sheet music, falling notes, sparks, colours, note speed; sound credits and MIDI devices.
 #pragma once
 

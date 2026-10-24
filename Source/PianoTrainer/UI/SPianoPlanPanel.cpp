@@ -56,13 +56,26 @@ namespace PianoPlanPanelImpl
 			{
 				return Layer;
 			}
+			// green right, red not; a pass with one hand alone sits in a ring of that hand's colour
 			const TArray<int8>& Dots = Coach->GetDots();
 			for (int32 I = 0; I < Dots.Num(); ++I)
 			{
-				FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(FVector2f(9.f, 9.f), FSlateLayoutTransform(FVector2f(I * 11.f, 1.f))),
-					PianoStyle::Rounded(FLinearColor::White, 4.5f), ESlateDrawEffect::None, Dots[I] ? PianoStyle::Good : PianoStyle::Bad);
+				const uint8 Hands = uint8(Dots[I] >> 1) & 3;
+				const FLinearColor Result = (Dots[I] & 1) ? PianoStyle::Good : PianoStyle::Bad;
+				if (Hands == 1 || Hands == 2)
+				{
+					FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(FVector2f(11.f, 11.f), FSlateLayoutTransform(FVector2f(I * 13.f, 0.f))),
+						PianoStyle::Rounded(FLinearColor::White, 5.5f), ESlateDrawEffect::None, PianoStyle::HandColor(Hands));
+					FSlateDrawElement::MakeBox(Out, Layer + 1, Geometry.ToPaintGeometry(FVector2f(7.f, 7.f), FSlateLayoutTransform(FVector2f(I * 13.f + 2.f, 2.f))),
+						PianoStyle::Rounded(FLinearColor::White, 3.5f), ESlateDrawEffect::None, Result);
+				}
+				else
+				{
+					FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(FVector2f(11.f, 11.f), FSlateLayoutTransform(FVector2f(I * 13.f, 0.f))),
+						PianoStyle::Rounded(FLinearColor::White, 5.5f), ESlateDrawEffect::None, Result);
+				}
 			}
-			return Layer;
+			return Layer + 1;
 		}
 	private:
 		FPianoCoach* Coach = nullptr;
@@ -201,6 +214,33 @@ TSharedRef<SWidget> SPianoPlanPanel::MakeContent()
 		];
 	}
 
+	// hands separately or together (Bernhard: separately is not obligatory; try together, and if it is not right...)
+	Box->AddSlot().AutoHeight().Padding(FMargin(0.f, 8.f, 0.f, 0.f))
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(0.f, 0.f, 8.f, 0.f))
+		[
+			SNew(STextBlock).Font(PianoStyle::Font(8, TEXT("Bold"), 80)).ColorAndOpacity(PianoStyle::TextDim).Text(LOCTEXT("HandsLabel", "HANDS"))
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.f)
+		[
+			Segmented({ LOCTEXT("HandsAuto", "Auto"), LOCTEXT("HandsSeparate", "Separate first"), LOCTEXT("HandsTogether", "Together") },
+				[this]() { return Coach ? int32(Coach->GetHandsMode()) : 0; },
+				[this](int32 Index) { if (Coach) { Coach->SetHandsMode(ECoachHands(Index)); } })
+		]
+	];
+	Box->AddSlot().AutoHeight().Padding(FMargin(0.f, 4.f, 0.f, 0.f))
+	[
+		SNew(STextBlock).Font(PianoStyle::Font(8)).ColorAndOpacity(PianoStyle::TextFaint).AutoWrapText(true)
+		.Text_Lambda([this]()
+		{
+			const ECoachHands Mode = Coach ? Coach->GetHandsMode() : ECoachHands::Auto;
+			return Mode == ECoachHands::Separate ? LOCTEXT("HandsSeparateHint", "Each hand alone, taking turns (three times right, then twice, then once each), then together.")
+				: Mode == ECoachHands::Together ? LOCTEXT("HandsTogetherHint", "Both hands from the first time through.")
+				: LOCTEXT("HandsAutoHint", "Together first; if that is not right, each hand alone in turns, then together.");
+		})
+	];
+
 	Box->AddSlot().AutoHeight()[MakeSession()];
 	Box->AddSlot().AutoHeight()[Separator()];
 	Box->AddSlot().AutoHeight()[SectionLabel(LOCTEXT("Sections", "SECTIONS"))];
@@ -247,12 +287,38 @@ TSharedRef<SWidget> SPianoPlanPanel::MakeSession()
 					SNew(STextBlock).Font(PianoStyle::Font(10)).ColorAndOpacity(PianoStyle::GoldGlow).AutoWrapText(true)
 					.Text_Lambda([this]() { return Coach ? Coach->GetAdvice() : FText::GetEmpty(); })
 				]
+				// hands separately: which hand, its streak, the turns so far
+				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))
+				[
+					SNew(STextBlock).Font(PianoStyle::Font(9, TEXT("Bold")))
+					.Visibility_Lambda([this]() { return Coach && (Coach->GetPhase() == ECoachPhase::Hands || !Coach->GetHandTurns().IsEmpty()) ? EVisibility::Visible : EVisibility::Collapsed; })
+					.ColorAndOpacity_Lambda([this]() { return FSlateColor(Coach && Coach->GetPhase() == ECoachPhase::Hands ? PianoStyle::HandColor(uint8(Coach->GetHand())) : PianoStyle::TextDim); })
+					.Text_Lambda([this]()
+					{
+						if (!Coach)
+						{
+							return FText::GetEmpty();
+						}
+						const FText Turns = FText::FromString(Coach->GetHandTurns().IsEmpty() ? FString() : TEXT("   ") + Coach->GetHandTurns());
+						if (Coach->GetPhase() != ECoachPhase::Hands)
+						{
+							return FText::Format(LOCTEXT("HandsDoneLine", "Hands separately:{0}"), Turns);
+						}
+						return FText::Format(LOCTEXT("HandsLine", "{0} HAND ALONE{1}"),
+							Coach->GetHand() == EPianoHand::Left ? LOCTEXT("LeftCaps", "LEFT") : LOCTEXT("RightCaps", "RIGHT"), Turns);
+					})
+				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 8.f, 0.f, 0.f))[SNew(SPassDots).Coach(Coach)]
 				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 4.f, 0.f, 0.f))
 				[
 					SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim)
 					.Text_Lambda([this]()
 					{
+						if (Coach && Coach->GetPhase() == ECoachPhase::Hands)
+						{
+							return FText::Format(LOCTEXT("HandCounts", "right hand {0} times through · left hand {1} · then together"),
+								Coach->GetHandPasses(EPianoHand::Right), Coach->GetHandPasses(EPianoHand::Left));
+						}
 						return Coach ? FText::Format(LOCTEXT("Counts", "{0} times through · {1} right · aim {2}"), Coach->GetPasses(), Coach->GetClean(), Coach->GetTarget()) : FText::GetEmpty();
 					})
 				]

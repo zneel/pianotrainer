@@ -17,6 +17,9 @@ $Ode = "-score=`"$Root\Scores\ode_to_joy.musicxml`""
 # the coach tests share a diary of their own, in this order: learn, next-day check, join, note-groups, too big, relearn
 $Diary = Join-Path $Out "diary_test.json"
 $DiaryArg = "-diary=`"$Diary`""
+# the hands tests start from a fresh diary of their own (Ode to Joy: m. 1-2, 3, 4-5, 6-7, 8)
+$HandsDiary = Join-Path $Out "diary_hands.json"
+$HandsArg = "-diary=`"$HandsDiary`""
 
 $Tests = [ordered]@{
     "ode_wait"      = @("-autotest", $Ode)
@@ -32,10 +35,16 @@ $Tests = [ordered]@{
     "coach_groups"  = @("-autotest", $Ode, $DiaryArg, "-coach=s1", "-coachgroups")
     # right at once, then mistakes come back twice: the next clean pass ends the session
     "coach_tired"   = @("-autotest", $Ode, $DiaryArg, "-coach=s1", "-autoerrors=20")
-    "coach_toobig"  = @("-autotest", $Ode, $DiaryArg, "-coach=s2", "-autoerrors=3", "-coachsplit")
+    "coach_toobig"  = @("-autotest", $Ode, $DiaryArg, "-coach=s2", "-autoerrors=3", "-coachsplit", "-coachhands=together")
     "coach_relearn" = @("-autotest", $Ode, $DiaryArg, "-coach=s0")
     # Op. 10 No. 3: the plan's first session is its hardest section
     "coach_hardest" = @("-autotest", $DiaryArg, "-coach=0", "-hands=right", "-score=`"$Etudes\010-1b-Sm-003.krn`"")
+    # hands together first (two mistakes in it) -> each hand alone in turns -> together again, in one session
+    "coach_hands_auto"   = @("-autotest", $Ode, $HandsArg, "-coach=s3", "-autoerrors=4", "-autoerrorsuntil=8")
+    # hands separately from the start: R3 L3 R2 L2 R1 L1, then together
+    "coach_hands_sep"    = @("-autotest", $Ode, $HandsArg, "-coach=s2", "-coachhands=separate")
+    # every note wrong, at 40 %: each turn ends on the half-minute limit, then a hand alone seven times and never right -> too big
+    "coach_hands_toobig" = @("-autotest", $Ode, $HandsArg, "-coach=s4", "-coachhands=separate", "-autoerrors=1", "-tempo=0.4")
 }
 
 function Edit-Diary([scriptblock]$Change) {
@@ -45,6 +54,7 @@ function Edit-Diary([scriptblock]$Change) {
 }
 $Prep = @{
     "coach_learn"   = { Remove-Item $Diary -ErrorAction SilentlyContinue }
+    "coach_hands_auto" = { Remove-Item $HandsDiary -ErrorAction SilentlyContinue }
     # learned (and last played) yesterday: today's first time through decides whether it is mastered
     "coach_cold"    = { Edit-Diary { param($S) $S.learned = $S.last = (Get-Date).AddDays(-1).ToString("yyyy-MM-dd") } }
     # mastered, last played 40 days ago, relearned twice: the third relearning makes it omniscient
@@ -70,6 +80,7 @@ foreach ($Name in $Tests.Keys) {
         if ($J.coach_phases) {
             $Line += "  {0}: {1}, {2}/{3} clean (target {4}), groups {5}, stage {6}, sections {7}" -f $J.coach_label, $J.coach_phases, $J.coach_clean, $J.coach_passes, $J.coach_target, $J.coach_group_passes, $J.section_stage, $J.plan_sections
             if ($J.sections_after_split -ge 0) { $Line += " (split {0}->{1})" -f $J.sections_before_split, $J.sections_after_split }
+            if ($J.coach_hand_turns) { $Line += ", hands {0}" -f $J.coach_hand_turns }
         }
         Write-Output $Line
     } else {

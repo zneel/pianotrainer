@@ -272,7 +272,7 @@ FText SPianoApp::GetSubtitle() const
 	}
 	if (P->GetDrill() != EPianoDrill::AsWritten)
 	{
-		Text += (Text.IsEmpty() ? TEXT("") : TEXT("  ·  ")) + FString::Printf(TEXT("Drill: %s"), *FPianoDrills::GetName(P->GetDrill()).ToString());
+		Text += (Text.IsEmpty() ? TEXT("") : TEXT("  ·  ")) + FString::Printf(TEXT("Tool: %s"), *FPianoDrills::GetName(P->GetDrill()).ToString());
 	}
 	const FPianoStats& S = P->GetStats();
 	if (S.Hits + S.Wrong + S.Missed > 0)

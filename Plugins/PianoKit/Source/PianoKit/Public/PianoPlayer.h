@@ -101,6 +101,8 @@ public:
 
 	// Transport
 	void Play();
+	// Counts in again (the count-in bars at the tempo of SongMs) and plays on from where the clock is; plays if paused.
+	void CountInAgain(double SongMs);
 	void Pause();
 	void TogglePlay() { IsPlaying() ? Pause() : Play(); }
 	bool IsPlaying() const;
@@ -147,6 +149,8 @@ public:
 	// The latest completed loop pass, and a counter that changes with every pass.
 	const FPianoPass& GetLastPass() const { return LastPass; }
 	int32 GetPassSerial() const { return PassSerial; }
+	// Broadcast as each pass is judged, before anything else this frame (autoplay included) acts on the new pass.
+	FSimpleMulticastDelegate OnPassJudged;
 	// Score notes of the practised hands that start at the next onset at/after the cursor (the keys to play next).
 	void GetUpcomingNotes(TArray<int32>& OutNoteIndices) const;
 	// Wrong key flashes: pitch -> wall-clock seconds of the last wrong press.
@@ -156,7 +160,8 @@ public:
 
 	// Automation: plays the practised hands perfectly (used by -autotest runs).
 	// ErrorEvery > 0: every Nth practised note is played a semitone too high instead (tests wrong / missed scoring).
-	void SetAutoplay(bool bEnabled, int32 InErrorEvery = 0) { bAutoplay = bEnabled; AutoplayErrorEvery = InErrorEvery; }
+	// InErrorsUntil > 0: mistakes only among the first that many notes played
+	void SetAutoplay(bool bEnabled, int32 InErrorEvery = 0, int32 InErrorsUntil = 0) { bAutoplay = bEnabled; AutoplayErrorEvery = InErrorEvery; AutoplayErrorsUntil = InErrorsUntil; }
 	// With autoplay: change the sustain pedal at every barline (up just after the downbeat, down again 80 ms later).
 	void SetAutoPedal(bool bEnabled) { bAutoPedal = bEnabled; }
 
@@ -238,6 +243,7 @@ private:
 	bool bAutoPedal = false;
 	int32 AutoPedalMeasure = 0;
 	int32 AutoplayErrorEvery = 0;
+	int32 AutoplayErrorsUntil = 0;
 	int32 AutoplayCount = 0;
 	int32 AutoplayNext = 0;
 	// after a seek: song ms it went to, and when; autoplay waits until the audio thread is there

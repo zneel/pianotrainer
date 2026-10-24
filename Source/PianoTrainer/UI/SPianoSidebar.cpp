@@ -56,7 +56,7 @@ void SPianoSidebar::Construct(const FArguments& InArgs)
 	FString TabName; // -sidebartab=practice|plan|visual: open on that tab (screenshots)
 	if (FParse::Value(FCommandLine::Get(), TEXT("-sidebartab="), TabName))
 	{
-		Tab = TabName == TEXT("plan") ? 1 : TabName == TEXT("visual") ? 2 : 0;
+		Tab = TabName == TEXT("practice") ? 1 : TabName == TEXT("visual") ? 2 : 0;
 	}
 	Player = InArgs._Player;
 	Settings = InArgs._Settings;
@@ -82,8 +82,8 @@ void SPianoSidebar::Construct(const FArguments& InArgs)
 				SNew(SBorder).BorderImage(PianoStyle::Rounded(PianoStyle::Background, 13.f)).Padding(3.f)
 				[
 					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth()[TabButton(LOCTEXT("Practice", "Practice"), 0)]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(3.f, 0.f, 0.f, 0.f))[TabButton(LOCTEXT("Plan", "Plan"), 1)]
+					+ SHorizontalBox::Slot().AutoWidth()[TabButton(LOCTEXT("Plan", "Plan"), 0)]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(3.f, 0.f, 0.f, 0.f))[TabButton(LOCTEXT("Practice", "Practice"), 1)]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(3.f, 0.f, 0.f, 0.f))[TabButton(LOCTEXT("Visual", "Visual"), 2)]
 				]
 			]
@@ -91,8 +91,8 @@ void SPianoSidebar::Construct(const FArguments& InArgs)
 			[
 				SNew(SWidgetSwitcher)
 				.WidgetIndex_Lambda([this]() { return Tab; })
-				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot()[MakePracticeTab()]]
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot()[SNew(SPianoPlanPanel).Player(Player).Coach(Coach).Title(Title)]]
+				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot()[MakePracticeTab()]]
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot()[MakeVisualTab()]]
 			]
 		]
@@ -165,7 +165,7 @@ TSharedRef<SWidget> SPianoSidebar::MakePracticeTab()
 	];
 
 	Practice->AddSlot().AutoHeight()[Separator()];
-	Practice->AddSlot().AutoHeight()[SectionLabel(LOCTEXT("Drills", "DRILLS · AFTER CORTOT"))];
+	Practice->AddSlot().AutoHeight()[SectionLabel(LOCTEXT("Tools", "PRACTICE TOOLS · WHAT IS GOING WRONG?"))];
 	Practice->AddSlot().AutoHeight()[MakeDrills()];
 
 	Practice->AddSlot().AutoHeight()[Separator()];
@@ -221,36 +221,53 @@ TSharedRef<SWidget> SPianoSidebar::MakePracticeTab()
 TSharedRef<SWidget> SPianoSidebar::MakeDrills()
 {
 	using namespace PianoUI;
-	TSharedRef<SWrapBox> Chips = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.0, 4.0));
-	for (int32 Index = 0; Index < int32(EPianoDrill::Count); ++Index)
+	// Bernhard: start from the problem, not from a method - name what is going wrong, then use the tool for it
+	auto Chip = [this](EPianoDrill Drill)
 	{
-		const EPianoDrill Drill = EPianoDrill(Index);
-		Chips->AddSlot()
-		[
-			Button(TAttribute<FText>::CreateLambda([this, Drill]()
-				{
-					const FPianoLibraryEntry* E = Entry ? Entry() : nullptr;
-					const bool bSuggested = E && E->Drills.Contains(Drill);
-					return bSuggested ? FText::Format(LOCTEXT("Suggested", "★ {0}"), FPianoDrills::GetName(Drill)) : FPianoDrills::GetName(Drill);
-				}),
-				[this, Drill]() { if (UPianoPlayer* X = Player.Get()) { X->SetDrill(Drill); } },
-				EButton::Chip, TAttribute<bool>::CreateLambda([this, Drill]() { const UPianoPlayer* X = Player.Get(); return X && X->GetDrill() == Drill; }), true, 9)
-		];
-	}
+		return Button(TAttribute<FText>::CreateLambda([this, Drill]()
+			{
+				const FPianoLibraryEntry* E = Entry ? Entry() : nullptr;
+				const bool bSuggested = E && E->Drills.Contains(Drill);
+				return bSuggested ? FText::Format(LOCTEXT("Suggested", "★ {0}"), FPianoDrills::GetName(Drill)) : FPianoDrills::GetName(Drill);
+			}),
+			[this, Drill]() { if (UPianoPlayer* X = Player.Get()) { X->SetDrill(X->GetDrill() == Drill ? EPianoDrill::AsWritten : Drill); } },
+			EButton::Chip, TAttribute<bool>::CreateLambda([this, Drill]() { const UPianoPlayer* X = Player.Get(); return X && X->GetDrill() == Drill; }), true, 9);
+	};
+	auto Problem = [Chip](const FText& What, std::initializer_list<EPianoDrill> Tools)
+	{
+		TSharedRef<SWrapBox> Chips = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4.0, 4.0));
+		for (const EPianoDrill Tool : Tools)
+		{
+			Chips->AddSlot()[Chip(Tool)];
+		}
+		return SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).AutoWrapText(true).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim).Text(What)]
+			+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 3.f, 0.f, 0.f))[Chips];
+	};
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).AutoWrapText(true).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim)
+			SNew(STextBlock).AutoWrapText(true).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint)
 			.Text_Lambda([this]()
 			{
 				const FPianoLibraryEntry* E = Entry ? Entry() : nullptr;
-				return E && !E->Focus.IsEmpty() ? E->Focus : LOCTEXT("DrillIntro", "Practise a hard passage in other rhythms and groupings before playing it as written. Loop a few measures, then step through the drills.");
+				return E && !E->Focus.IsEmpty() ? E->Focus : LOCTEXT("ToolsIntro", "For a spot that will not go: name what is going wrong, use the tool for it on the looped bars, then play them as written again. The tools are made from the score.");
 			})
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 8.f, 0.f, 0.f))[Chips]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 8.f, 0.f, 0.f))[Problem(LOCTEXT("PShape", "Too many notes to see the shape"), { EPianoDrill::Outline })]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))[Problem(LOCTEXT("PMove", "The hand cannot find its position or movement at speed"), { EPianoDrill::BlockChords })]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))[Problem(LOCTEXT("PSpeed", "It will not go faster"), { EPianoDrill::Impulses, EPianoDrill::BlockChords })]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))[Problem(LOCTEXT("PEven", "Uneven, or it hesitates (once the notes are learned: both directions)"), { EPianoDrill::ShortLong, EPianoDrill::LongShort })]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))[Problem(LOCTEXT("PTone", "Uneven tone"), { EPianoDrill::AccentThree, EPianoDrill::AccentFour })]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 6.f, 0.f, 0.f))
+		[
+			SNew(STextBlock).AutoWrapText(true).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim)
+			.Text(LOCTEXT("PStuck", "One spot keeps going wrong: note-groups, in the Plan tab's session."))
+		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 8.f, 0.f, 0.f))
 		[
 			SNew(SBorder).BorderImage(PianoStyle::Rounded(PianoStyle::GoldShade, 6.f)).Padding(FMargin(10.f, 7.f))
+			.Visibility_Lambda([this]() { const UPianoPlayer* X = Player.Get(); return X && X->GetDrill() != EPianoDrill::AsWritten ? EVisibility::Visible : EVisibility::Collapsed; })
 			[
 				SNew(STextBlock).AutoWrapText(true).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::GoldGlow)
 				.Text_Lambda([this]()
@@ -261,12 +278,12 @@ TSharedRef<SWidget> SPianoSidebar::MakeDrills()
 						return FText::GetEmpty();
 					}
 					const FPianoStats& S = X->GetStats();
+					const FText Hint = FText::Format(LOCTEXT("HintOff", "{0}  (Click it again to play as written.)"), FPianoDrills::GetHint(X->GetDrill()));
 					if ((X->GetDrill() == EPianoDrill::AccentThree || X->GetDrill() == EPianoDrill::AccentFour) && S.AccentHits > 0 && S.PlainHits > 0)
 					{
-						return FText::Format(LOCTEXT("AccentStat", "{0}  Your accents: {1} louder (MIDI velocity)."), FPianoDrills::GetHint(X->GetDrill()),
-							FText::AsNumber(FMath::RoundToInt32(S.AccentContrast())));
+						return FText::Format(LOCTEXT("AccentStat", "{0}  Your accents: {1} louder (MIDI velocity)."), Hint, FText::AsNumber(FMath::RoundToInt32(S.AccentContrast())));
 					}
-					return FPianoDrills::GetHint(X->GetDrill());
+					return Hint;
 				})
 			]
 		];

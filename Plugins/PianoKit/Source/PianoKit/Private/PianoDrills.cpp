@@ -91,12 +91,12 @@ FText FPianoDrills::GetHint(EPianoDrill Drill)
 {
 	switch (Drill)
 	{
-	case EPianoDrill::LongShort: return LOCTEXT("LongShortHint", "Pairs of notes in a dotted rhythm. Lean on the long note, flick the short one.");
-	case EPianoDrill::ShortLong: return LOCTEXT("ShortLongHint", "The same pairs reversed: the short note now leads into the long one.");
-	case EPianoDrill::Impulses: return LOCTEXT("ImpulsesHint", "Each beat as one quick gesture, then rest on its last note. Think in groups, not notes.");
-	case EPianoDrill::BlockChords: return LOCTEXT("BlockChordsHint", "Each beat's notes together as one chord: learn the hand positions before the motion.");
-	case EPianoDrill::AccentThree: return LOCTEXT("AccentThreeHint", "Accent every third note so the stress walks across the beat. Keep the rest light.");
-	case EPianoDrill::AccentFour: return LOCTEXT("AccentFourHint", "Accent every fourth note. Even fingers, clear accents.");
+	case EPianoDrill::LongShort: return LOCTEXT("LongShortHint", "Rhythm variation, slow–fast: hold the first note of each pair, then the second at once. Play the mirror (short–long) too: the harder way round shows where it is weak. Only once the notes are learned.");
+	case EPianoDrill::ShortLong: return LOCTEXT("ShortLongHint", "Rhythm variation, fast–slow: play the first note of each pair and go straight to the second, then wait. Never hesitate on the fast one. Play the mirror (long–short) too.");
+	case EPianoDrill::Impulses: return LOCTEXT("ImpulsesHint", "Each beat as one quick gesture, then rest on its last note: group the notes into bigger units until the passage is one movement.");
+	case EPianoDrill::BlockChords: return LOCTEXT("BlockChordsHint", "The chord trick: each beat's notes struck together - the fastest they can be played - so the hand finds its position and movement at speed. Then break the chords again.");
+	case EPianoDrill::AccentThree: return LOCTEXT("AccentThreeHint", "Accent variation: every third note, so the stress walks across the beat. It evens out the tone. Keep the rest light.");
+	case EPianoDrill::AccentFour: return LOCTEXT("AccentFourHint", "Accent variation: every fourth note. Even fingers, clear accents.");
 	case EPianoDrill::Outline: return LOCTEXT("OutlineHint", "Only the first notes of each beat: the harmony and line under the figuration. Learn it first and make it musical; the figuration fills it in later.");
 	default: return LOCTEXT("AsWrittenHint", "The music as written.");
 	}

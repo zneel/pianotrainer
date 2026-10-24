@@ -9,8 +9,8 @@ On top of the practice screen it has:
 - a **practice plan after Bernhard's method** (Piano Street forum): the piece cut into small sections, the
   seven-times test, "practice starts when you get it right", stop while it is perfect, 20 minutes at most per
   section, joins between sections, learned → mastered → never forgotten, and a **practice diary**;
-- **Chopin's 24 Études** (Op. 10 and Op. 25, from the first editions) with **drills after Cortot's working method**:
-  outline, dotted rhythms, impulse groups, block-chord positions and moving accents, generated from the score.
+- **Chopin's 24 Études** (Op. 10 and Op. 25, from the first editions) and **practice tools made from the score**,
+  listed by what is going wrong: outline, the chord trick, impulse groups, rhythm variations, moving accents.
 
 | Piece | What it does |
 |---|---|
@@ -22,12 +22,12 @@ On top of the practice screen it has:
 | **PianoKit Sequencer** (our MetaSound node) | The practice engine on the audio thread: accompaniment, your keys, wait mode (the clock stops exactly at the next chord), play-along scoring (±220 ms, latency-compensated), count-in clicks, tempo, seek, loop. |
 | **PianoKit Sfizz** (our MetaSound node) | Feeds the sequencer's MIDI stream into sfizz sample-accurately and renders it; also the count-in clicks. |
 | **Harmonix** / **MIDI Device Support** (Epic plugins) | MIDI stream types between the nodes; every connected MIDI keyboard is bound automatically (CC64 = sustain pedal). |
-| Slate UI (`Source/PianoTrainer/UI`) | Menu, practice screen, sheet strip, keyboard, optional falling notes, sidebar (Practice / Plan / Visual), transport, practice coach. No editor assets are needed: the MetaSound graph is built in code. |
+| Slate UI (`Source/PianoTrainer/UI`) | Menu, practice screen, sheet strip, keyboard, optional falling notes, sidebar (Plan / Practice / Visual), transport, practice coach. No editor assets are needed: the MetaSound graph is built in code. |
 
 ## Using it
 
 **Menu.** *Home*: continue, the Chopin Études, open a score, and the pieces practised recently. *Études*: each
-étude's key, nickname, what it trains and its suggested drills. *Diary*: practice days in the last week, what is due
+étude's key, nickname, what it trains and the tools that suit it. *Diary*: practice days in the last week, what is due
 today (sections to check or play through, pieces to relearn), each plan's progress and the latest sessions; click an
 item to practise it. *Library*: the bundled samples and recent files. `Esc` toggles the menu.
 
@@ -35,10 +35,10 @@ item to practise it. *Library*: the bundled samples and recent files. `Esc` togg
 keyboard under it, the measure ruler (click a measure to jump, drag across measures to loop them; the plan's sections
 are drawn along its top: grey new, gold learned, green mastered) and the transport bar (piece and progress, measure
 counter, restart / measure back / play-pause / measure forward, speed knob, loop) at the bottom, and the sidebar:
+- *Plan tab* (the first): the practice plan (below).
 - *Practice tab:* mode (**Wait** for me / **Play along** / **Listen**), hand, my keys sound, input latency, count-in
-  (1 or 2 bars of clicks), **drills** (★ = suggested for this étude; the accent drills also report how much louder
-  you played the accents, from MIDI velocity), loop section, and the two hands' note counts.
-- *Plan tab:* the practice plan (below).
+  (1 or 2 bars of clicks), **practice tools** by problem (★ = suits this étude; the accent tools also report how
+  much louder you played the accents, from MIDI velocity), loop section, and the two hands' note counts.
 - *Visual tab:* sheet music, falling notes (off by default), sparks, colour by hand, how long notes fall.
 
 Colours: the right hand is gold, the left copper; notes you play turn green, missed ones red; the hand the app plays
@@ -65,6 +65,14 @@ app's Plan tab applies it (`docs/bernhard-method.md` collects the sources):
   times? The section is too big: *Cut in half* splits it (down to a single beat) and starts again on the first half.
 - **Practice starts when you get it right.** After the first clean pass, play it right at least seven times and at
   least as often as it went wrong before. A mistake after it was right is fatigue: the coach says so.
+- **Hands separately, then together.** Technique is found with each hand alone (mistakes made hands together go
+  into hand memory), coordination hands together. *Hands: Auto* (the default) plays the section together first and
+  only goes to separate hands if that is not right, as Bernhard allowed; *Separate first* always does; *Together*
+  never does. Separately, the hands take turns after a bar of clicks: right three times in a row, then the other
+  hand, then twice each, then once each, never more than half a minute on one hand (the busier hand starts). Each
+  hand has its own seven-times test. When both hands are right once each in turn, they join in the same session.
+  Joins of sections are always together, and so is the next day's check (only if that fails do the hands go
+  separately again).
 - **Stop while it is perfect.** The session ends on a clean repetition: the section is *learned*.
 - **20 minutes at most** per section (a timer): not there by then, cut it in half.
 - **Mastered.** On a later day, the first time through a learned section decides: perfect straight away = mastered;
@@ -75,25 +83,28 @@ app's Plan tab applies it (`docs/bernhard-method.md` collects the sources):
 - **Note-groups.** For a stubborn spot: units of four notes of the practised hand, overlapping by one, played as
   1, 2, 3, ... then 1–2, 2–3, ... then longer, each twice right, up to the whole section.
 - **Tempo.** Aim at the final tempo or faster (70 / 85 / 100 / 110 % chips); the best clean tempo is kept per
-  section. Slow work belongs to the drills (outline, rhythms), not to the session.
+  section. Slow work belongs to the practice tools (outline, rhythms), not to the session.
 - **Diary.** Every session is written to `Saved/PianoDiary.json` (date, section, minutes, passes, clean ones, tempo,
   result); the Diary page counts practice days (Bernhard: at least three a week).
 
-### Drills (after Cortot)
+### Practice tools
 
-Alfred Cortot's working editions of the Études (1915-17) prepare each difficulty with rhythmic variants, groupings
-and chord positions before the étude is played as written. His exercises themselves are still under copyright in
-Europe (he died in 1962), so the app **generates** the same kinds of drills from the score instead. Each drill
-re-times or re-accents the practised hand's notes inside each beat (the accompaniment stays as written, so the sheet
-and the measure counter stay in step):
+Bernhard's rule: start from the problem, not from a method. The Practice tab lists the tools by what is going wrong
+in the looped bars; each one is generated from the score and re-times or re-accents the practised hand's notes inside
+each beat (the accompaniment stays as written, so the sheet and the measure counter stay in step). Click a tool
+again to play as written.
 
-| Drill | What changes |
-|---|---|
-| Outline | only each beat's first note, held through the beat (the skeleton of a run or figure) |
-| Dotted: long–short / short–long | each pair of notes in a beat becomes 3:1 / 1:3 |
-| Impulses | each beat's notes as one quick gesture in its first third, then held |
-| Block chords | each beat's notes struck together (hand positions of arpeggios and broken chords) |
-| Accent every 3rd / 4th | accents that walk across the beat (velocity +30) |
+| Problem | Tool | What changes |
+|---|---|---|
+| Too many notes to see the shape | Outline | only each beat's first note, held through the beat: learn the line first, the figuration fills it in later |
+| The hand cannot find its position or movement at speed | Block chords (the chord trick) | each beat's notes struck together, the fastest they can be played; then break them again |
+| It will not go faster | Impulses, block chords | each beat as one quick gesture in its first third, then held: bigger units |
+| Uneven, or it hesitates | Rhythms short–long / long–short | each pair in a beat becomes 1:3 / 3:1; always both directions, and only once the notes are learned |
+| Uneven tone | Accent every 3rd / 4th | accents that walk across the beat (velocity +30) |
+| One spot keeps going wrong | Note-groups | in the Plan tab's session (above) |
+
+The same kinds of exercise are in Alfred Cortot's working editions of the Études (1915-17), which Bernhard also
+recommended; those exercises are still under copyright in Europe, so nothing of them is used here.
 
 ## Getting the sources and data
 
@@ -149,9 +160,11 @@ piece.
   `-recordwav` (master output to `autotest.wav`), `-shot=<ms>` (screenshot), `-pianolog` (event CSV).
 - `-coach=<n>` / `-coach=s<k>` (with `-autotest`) runs session *n* of the piece's plan, or section *k* alone, until
   the coach says done or too big, and adds the coach's phases, passes, the section's stage and the diary to the
-  report; `-coachgroups` starts note-groups, `-coachsplit` cuts a too-big section in half, `-diary=<file>` keeps the
-  test's diary apart from yours. The battery runs learn → next-day check (the learned date moved back a day) → join →
-  note-groups → too big + split → relearn after 40 days.
+  report; `-coachgroups` starts note-groups, `-coachsplit` cuts a too-big section in half,
+  `-coachhands=auto|separate|together` sets the hands choice for the run (default auto, whatever you saved),
+  `-autoerrorsuntil=N` keeps the autoplay's mistakes to its first N notes, `-diary=<file>` keeps the test's diary
+  apart from yours. The battery runs learn → next-day check (the learned date moved back a day) → join → note-groups
+  → stop when tired → too big + split → relearn after 40 days → hardest first, then the hands tests on a fresh diary.
 - `-uishot=<s>` saves a screenshot of whatever is on screen (the menu too) and quits; `-menupage=etudes|diary|library`
   and `-sidebartab=practice|plan|visual` open the app on that page or tab.
 - `tools/wav_clicks.py`, `wav_levels.py`, `wav_onsets.py` measure recordings; `tools/vrv_probe.py` runs a score
@@ -172,9 +185,12 @@ over 33 ms in any run):
 | `coach_join` | done | join m. 1–3, 7 right |
 | `coach_groups` | done | note-groups 1, 2 (twice right each), then the whole section, 7 right |
 | `coach_tired` | done | right, then mistakes came back twice → stopped on the next clean pass (4 of 6 right) |
-| `coach_toobig` | split | wrong every 3rd note: 7 times and never right → too big → cut in half (5 → 6 sections) |
+| `coach_toobig` | split | hands together, wrong every 3rd note: 7 times and never right → too big → cut in half (5 → 6 sections) |
 | `coach_relearn` | done | mastered, last played 40 days ago, relearned for the third time → omniscient |
 | `coach_hardest` | done | Op. 10 No. 3: the plan starts at m. 17 (its densest bar), 7 right |
+| `coach_hands_auto` | done | two mistakes together → right hand alone R3, left L3, R2, L2, R1, L1 → together, 7 right |
+| `coach_hands_sep` | done | separate first: R3 L3 R2 L2 R1 L1 → together, 7 right, 0 wrong |
+| `coach_hands_toobig` | too big | every note wrong at 40 %: each hand's turn ends at half a minute (R, L), then the right hand's 7th wrong time → too big |
 | stress (Chopin, 200 %, listen) | finished | 3168 notes, 0 frames over 33 ms, smooth-scroll jitter p99 1.66 ms |
 
 The Shipping package gives the same results for `ode_countin` (same click and note onsets in its recording),
@@ -208,8 +224,7 @@ tools/                       fetch scripts, test battery, score generators, wav 
 - Not yet tested: a real MIDI keyboard and its pedal, and the macOS build.
 - The three Nouvelles Études are not included: no openly licensed machine-readable edition was found.
 - `.mscz` needs MuseScore Studio installed; plain `.mid` files are refused (no notation to engrave).
-- From `docs/bernhard-method.md` §4, not built yet: hands separate → together inside a session (and alternating
-  hands every ~30 s), a dropping-notes join mode, a personal "seven" (Bernhard: 5-9 for most people), a
+- From `docs/bernhard-method.md` §4, not built yet: a dropping-notes join mode, a personal "seven" (Bernhard: 5-9 for most people), a
   jump-up-and-back tempo ladder, a hidden-sheet memory pass, free-text diary notes with a "tomorrow" line, folding
   repeated bars into one section, and a daily queue across pieces.
 

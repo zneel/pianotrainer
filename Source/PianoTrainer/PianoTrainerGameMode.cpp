@@ -142,9 +142,10 @@ void APianoTrainerGameMode::BeginPlay()
 	}
 	if (bAutotest)
 	{
-		int32 ErrorEvery = 0;
+		int32 ErrorEvery = 0, ErrorsUntil = 0;
 		FParse::Value(Cmd, TEXT("-autoerrors="), ErrorEvery);
-		Player->SetAutoplay(true, ErrorEvery);
+		FParse::Value(Cmd, TEXT("-autoerrorsuntil="), ErrorsUntil); // mistakes only among the first N notes
+		Player->SetAutoplay(true, ErrorEvery, ErrorsUntil);
 		Player->SetAutoPedal(FParse::Param(Cmd, TEXT("autopedal")));
 		Player->Restart();
 		double StartMs = 0.0;
@@ -289,6 +290,9 @@ void APianoTrainerGameMode::StartCoachTest()
 	{
 		Coach->MakePlan(Score->GetTitle());
 	}
+	FString Hands = TEXT("auto"); // -coachhands=auto|separate|together (for this run only, whatever the saved choice)
+	FParse::Value(FCommandLine::Get(), TEXT("-coachhands="), Hands);
+	Coach->SetHandsMode(Hands == TEXT("separate") ? ECoachHands::Separate : Hands == TEXT("together") ? ECoachHands::Together : ECoachHands::Auto, false);
 	if (CoachArg.StartsWith(TEXT("s")))
 	{
 		Coach->StartSection(FCString::Atoi(*CoachArg.Mid(1)));
@@ -307,7 +311,8 @@ void APianoTrainerGameMode::StartCoachTest()
 
 void APianoTrainerGameMode::TickCoachTest()
 {
-	static const TCHAR* PhaseNames[] = { TEXT("idle"), TEXT("trial"), TEXT("ingrain"), TEXT("groups"), TEXT("done"), TEXT("toobig") };
+	static const TCHAR* PhaseNames[] = { TEXT("idle"), TEXT("trial"), TEXT("ingrain"), TEXT("groups"), TEXT("done"), TEXT("toobig"), TEXT("hands") };
+	static const TCHAR* HandNames[] = { TEXT("?"), TEXT("right"), TEXT("left"), TEXT("both") };
 	FPianoCoach* Coach = App.IsValid() ? App->GetCoach() : nullptr;
 	if (!Coach)
 	{
@@ -320,7 +325,8 @@ void APianoTrainerGameMode::TickCoachTest()
 		CoachSeenPass = Player->GetPassSerial();
 		CoachGroupPasses += Phase == int32(ECoachPhase::Groups) ? 1 : 0;
 		const FPianoPass& Pass = Player->GetLastPass();
-		UE_LOG(LogPianoTrainer, Log, TEXT("Coach pass: %s hits %d missed %d wrong %d -> %s"), PhaseNames[Phase], Pass.Hits, Pass.Missed, Pass.Wrong, *Coach->GetAdvice().ToString());
+		UE_LOG(LogPianoTrainer, Log, TEXT("Coach pass: %s (next: %s hand) hits %d missed %d wrong %d -> %s"), PhaseNames[Phase], HandNames[uint8(Player->GetHands()) & 3],
+			Pass.Hits, Pass.Missed, Pass.Wrong, *Coach->GetAdvice().ToString());
 	}
 	if (Phase != CoachLastPhase)
 	{
@@ -389,13 +395,14 @@ void APianoTrainerGameMode::WriteAutotestReport(const TCHAR* Outcome)
 		CoachJson = FString::Printf(TEXT("  \"coach_label\": \"%s\",\n  \"coach_phases\": \"%s\",\n  \"coach_passes\": %d,\n  \"coach_clean\": %d,\n  \"coach_target\": %d,\n")
 			TEXT("  \"coach_seconds\": %.1f,\n  \"coach_group_passes\": %d,\n  \"coach_cold_check\": %s,\n  \"plan_sections\": %d,\n  \"plan_next_session\": %d,\n")
 			TEXT("  \"section_stage\": \"%s\",\n  \"section_label\": \"%s\",\n  \"section_best_tempo\": %.2f,\n  \"sections_before_split\": %d,\n  \"sections_after_split\": %d,\n")
-			TEXT("  \"plan_hardest\": \"%s\",\n  \"plan_due_review\": \"%s\",\n  \"diary_entries\": %d,\n  \"diary_last\": \"%s\",\n"),
+			TEXT("  \"plan_hardest\": \"%s\",\n  \"plan_due_review\": \"%s\",\n  \"coach_hands_mode\": %d,\n  \"coach_hand_turns\": \"%s\",\n  \"diary_entries\": %d,\n  \"diary_last\": \"%s\",\n"),
 			*Coach->GetLabel(), *CoachPhases, Coach->GetPasses(), Coach->GetClean(), Coach->GetTarget(), Coach->GetSeconds(), CoachGroupPasses,
 			Coach->IsColdCheck() ? TEXT("true") : TEXT("false"), Plan ? Plan->Sections.Num() : 0, Plan ? Plan->NextSession : -1,
 			Section ? StageNames[uint8(Section->Stage)] : TEXT(""), Section ? *Section->Label : TEXT(""), Section ? Section->BestTempo : 0.f,
 			SectionsBeforeSplit, SectionsAfterSplit,
 			Plan && Plan->Hardest() != INDEX_NONE ? *Plan->Sections[Plan->Hardest()].Label : TEXT(""),
 			Plan && Plan->DueReview(FPianoDiary::Today()) != INDEX_NONE ? *Plan->Sections[Plan->DueReview(FPianoDiary::Today())].Label : TEXT(""),
+			int32(Coach->GetHandsMode()), *Coach->GetHandTurns(),
 			Entries.Num(),
 			Entries.Num() > 0 ? *FString::Printf(TEXT("%s %s: %s"), *Entries.Last().What, *Entries.Last().Date, *Entries.Last().Result) : TEXT(""));
 	}

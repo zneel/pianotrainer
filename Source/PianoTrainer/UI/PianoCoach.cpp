@@ -4,6 +4,8 @@
 #include "PianoPlayer.h"
 #include "PianoScore.h"
 
+#include "Misc/ConfigCacheIni.h"
+
 #define LOCTEXT_NAMESPACE "PianoCoach"
 
 namespace PianoCoachImpl
@@ -11,12 +13,49 @@ namespace PianoCoachImpl
 	static constexpr int32 NotesPerUnit = 4;
 	static constexpr int32 MaxUnits = 8;     // Bernhard: more than ~8-10 units takes all day
 	static constexpr int32 GroupCleanNeeded = 2;
+	static const TCHAR* ConfigSection = TEXT("PianoTrainer.Coach");
+
+	static int32 HandIndex(EPianoHand Hand) { return Hand == EPianoHand::Left ? 1 : 0; }
+	static FText HandName(EPianoHand Hand) { return Hand == EPianoHand::Left ? LOCTEXT("LeftHand", "Left") : LOCTEXT("RightHand", "Right"); }
+}
+
+FPianoCoach::~FPianoCoach()
+{
+	if (Player)
+	{
+		Player->OnPassJudged.Remove(PassHandle);
+	}
 }
 
 void FPianoCoach::Init(UPianoPlayer* InPlayer)
 {
 	Player = InPlayer;
+	// react to a pass at once: a change of hands must come before the next pass's first notes
+	PassHandle = Player->OnPassJudged.AddRaw(this, &FPianoCoach::HandlePass);
 	Diary.Load();
+	int32 Mode = int32(ECoachHands::Auto);
+	GConfig->GetInt(PianoCoachImpl::ConfigSection, TEXT("Hands"), Mode, GGameUserSettingsIni);
+	HandsMode = ECoachHands(FMath::Clamp(Mode, 0, 2));
+}
+
+void FPianoCoach::SetHandsMode(ECoachHands Mode, bool bSave)
+{
+	HandsMode = Mode;
+	if (bSave)
+	{
+		GConfig->SetInt(PianoCoachImpl::ConfigSection, TEXT("Hands"), int32(Mode), GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+	}
+}
+
+int32 FPianoCoach::CountNotes(EPianoHand InHand) const
+{
+	int32 Count = 0;
+	for (const FPianoSessionNote& N : Player->GetPlayNotes())
+	{
+		Count += N.OnMs >= StartMs - 0.5 && N.OnMs < EndMs - 0.5 && !N.bTied && !N.bGrace && (uint8(N.Hand) & uint8(InHand)) != 0 ? 1 : 0;
+	}
+	return Count;
 }
 
 FString FPianoCoach::PieceKey() const
@@ -122,14 +161,112 @@ void FPianoCoach::Begin(const FPianoPlanSession& InSession, bool bScheduled)
 		? LOCTEXT("Join", "Joining sections: play them as one, with the first beat of what follows.")
 		: LOCTEXT("TrialStart", "Play it seven times. If it is learned by then, practise it; if not, it is too big — cut it in half.");
 
+	// hands separately or together: only for a single section with notes in both hands, practised with both
+	SessionHands = Hand = Player->GetHands();
+	bHandsDone = false;
+	HandTurns.Reset();
+	bBothHands = !Session.IsJoin() && SessionHands == EPianoHand::Both && CountNotes(EPianoHand::Right) > 0 && CountNotes(EPianoHand::Left) > 0;
+
 	Player->SetListenMode(false);
 	Player->SetWaitMode(false); // at tempo: the aim is the final speed (drills stay as chosen: rhythms are part of it)
 	CountInBefore = Player->GetCountInBars();
 	Player->SetCountInBars(1);
+	if (bBothHands && HandsMode == ECoachHands::Separate && !bColdCheck)
+	{
+		StartHands(LOCTEXT("SeparateFirst", "Hands separately first, then together."));
+		return;
+	}
 	LoopWhole();
 	Player->Seek(StartMs);
 	Player->Play();
 	SeenPass = Player->GetPassSerial();
+}
+
+void FPianoCoach::PlayHands(EPianoHand Hands)
+{
+	Hand = Hands;
+	Player->SetHands(Hands);
+	LoopWhole();
+	Player->Seek(StartMs);
+	Player->CountInAgain(StartMs); // a bar of clicks to change hands
+	SeenPass = Player->GetPassSerial();
+	TurnClean = TurnPasses = 0;
+	TurnSeconds = 0.f;
+}
+
+void FPianoCoach::StartHands(const FText& Why)
+{
+	using namespace PianoCoachImpl;
+	bHandsDone = true;
+	Phase = ECoachPhase::Hands;
+	TurnTarget = FirstTurn;
+	HandPasses[0] = HandPasses[1] = 0;
+	HandGotRight[0] = HandGotRight[1] = false;
+	HandSecure[0] = HandSecure[1] = false;
+	HandTurns.Reset();
+	// the busier hand first
+	FirstHand = CountNotes(EPianoHand::Left) > CountNotes(EPianoHand::Right) ? EPianoHand::Left : EPianoHand::Right;
+	PlayHands(FirstHand);
+	Advice = FText::Format(LOCTEXT("HandsStart", "{0} {1} hand alone: right {2} times in a row, then the other hand. Half a minute at most on a hand."),
+		Why, HandName(FirstHand), TurnTarget);
+}
+
+void FPianoCoach::OnHandPass(bool bCleanPass)
+{
+	using namespace PianoCoachImpl;
+	const int32 H = HandIndex(Hand);
+	++HandPasses[H];
+	++TurnPasses;
+	TurnClean = bCleanPass ? TurnClean + 1 : 0;
+	HandGotRight[H] |= bCleanPass;
+	if (!HandGotRight[H] && HandPasses[H] >= Trial)
+	{
+		Phase = ECoachPhase::TooBig;
+		Advice = FText::Format(LOCTEXT("HandTooBig", "The {0} hand alone, seven times and not right: this chunk is too big. Cut it in half."), HandName(Hand).ToLower());
+		Player->Pause();
+		return;
+	}
+
+	// the turn ends at its aim, or after half a minute on this hand (when the section is too long for the aim in that
+	// time, one clean pass to finish the turn will do)
+	const bool bAim = TurnClean >= TurnTarget;
+	const bool bTime = TurnSeconds >= HandTurnSeconds;
+	if (!bAim && !bTime)
+	{
+		Advice = bCleanPass
+			? FText::Format(LOCTEXT("HandRight", "{0} hand: {1} of {2} right in a row."), HandName(Hand), TurnClean, TurnTarget)
+			: FText::Format(LOCTEXT("HandAgain", "{0} hand: again, until it is right {1} times in a row."), HandName(Hand), TurnTarget);
+		return;
+	}
+	const float PassSeconds = TurnSeconds / float(FMath::Max(1, TurnPasses));
+	HandSecure[H] = bAim || (TurnClean >= 1 && PassSeconds * TurnTarget > HandTurnSeconds);
+	HandTurns += FString::Printf(TEXT("%s%s%d%s"), HandTurns.IsEmpty() ? TEXT("") : TEXT(" "), H == 0 ? TEXT("R") : TEXT("L"), TurnClean, HandSecure[H] ? TEXT("") : TEXT("~"));
+
+	const EPianoHand Other = Hand == EPianoHand::Right ? EPianoHand::Left : EPianoHand::Right;
+	if (Hand != FirstHand)
+	{
+		// a round is complete: both right at this aim -> a shorter aim; once each -> together
+		if (HandSecure[0] && HandSecure[1])
+		{
+			if (TurnTarget == 1)
+			{
+				Phase = ECoachPhase::Trial;
+				Passes = Clean = WrongBeforeRight = 0;
+				Target = Trial;
+				bGotRight = bFatigue = false;
+				FatigueMistakes = 0;
+				PlayHands(EPianoHand::Both);
+				Advice = LOCTEXT("HandsJoin", "Both hands are right on their own: now together. Seven times to get it right.");
+				return;
+			}
+			--TurnTarget;
+		}
+		HandSecure[0] = HandSecure[1] = false;
+	}
+	PlayHands(Other);
+	Advice = bAim
+		? FText::Format(LOCTEXT("HandNext", "Now the {0} hand alone: right {1} times in a row."), HandName(Other).ToLower(), TurnTarget)
+		: FText::Format(LOCTEXT("HandRest", "Half a minute on that hand: now the {0} hand, so neither tires. Right {1} times in a row."), HandName(Other).ToLower(), TurnTarget);
 }
 
 void FPianoCoach::LoopWhole()
@@ -199,6 +336,7 @@ void FPianoCoach::Finish(const TCHAR* Result)
 		Player->Pause();
 		Player->ClearLoop();
 		Player->SetCountInBars(CountInBefore);
+		Player->SetHands(SessionHands);
 	}
 	Phase = ECoachPhase::Idle;
 	Units.Reset();
@@ -272,8 +410,8 @@ void FPianoCoach::OnPass(bool bCleanPass)
 	{
 		return;
 	}
-	Dots.Add(bCleanPass ? 1 : 0);
-	if (Dots.Num() > 24)
+	Dots.Add(int8((bCleanPass ? 1 : 0) | (uint8(Player->GetHands()) << 1)));
+	if (Dots.Num() > 18)
 	{
 		Dots.RemoveAt(0);
 	}
@@ -310,6 +448,11 @@ void FPianoCoach::OnPass(bool bCleanPass)
 		NextGroup();
 		return;
 	}
+	if (Phase == ECoachPhase::Hands)
+	{
+		OnHandPass(bCleanPass);
+		return;
+	}
 
 	++Passes;
 	const FPianoPass& Pass = Player->GetLastPass();
@@ -338,6 +481,18 @@ void FPianoCoach::OnPass(bool bCleanPass)
 		}
 		Advice = LOCTEXT("NotYet", "Not yet mastered: practise it again from scratch, it will go faster than the first time.");
 		bColdCheck = false;
+		if (bBothHands && HandsMode != ECoachHands::Together)
+		{
+			// Bernhard: only if hands together fails the next day do you go back to the hands-separate steps
+			StartHands(LOCTEXT("NotYetHands", "Not yet mastered: the hands separately again, then together - it goes faster than the first time."));
+			return;
+		}
+	}
+	else if (Passes == 1 && !bCleanPass && bBothHands && !bHandsDone && HandsMode == ECoachHands::Auto)
+	{
+		// together first: not right -> each hand on its own (mistakes made together go into hand memory)
+		StartHands(LOCTEXT("AutoHands", "Not right together: each hand on its own first, then together."));
+		return;
 	}
 
 	if (!bGotRight)
@@ -422,6 +577,17 @@ void FPianoCoach::OnPass(bool bCleanPass)
 	}
 }
 
+void FPianoCoach::HandlePass()
+{
+	if (!Player || Phase == ECoachPhase::Idle || Phase == ECoachPhase::Done || Phase == ECoachPhase::TooBig || Piece != PieceKey()
+		|| Player->GetPassSerial() == SeenPass)
+	{
+		return;
+	}
+	SeenPass = Player->GetPassSerial();
+	OnPass(Player->GetLastPass().IsClean());
+}
+
 void FPianoCoach::Tick(float DeltaSeconds)
 {
 	if (!Player || Phase == ECoachPhase::Idle)
@@ -441,12 +607,12 @@ void FPianoCoach::Tick(float DeltaSeconds)
 	{
 		Seconds += DeltaSeconds; // a group set is finished in one go, whatever it takes
 	}
-	if (Player->GetPassSerial() != SeenPass)
+	if (Player->IsPlaying() && Phase == ECoachPhase::Hands && Player->GetCountInLeft() == 0)
 	{
-		SeenPass = Player->GetPassSerial();
-		OnPass(Player->GetLastPass().IsClean());
+		TurnSeconds += DeltaSeconds;
 	}
-	if ((Phase == ECoachPhase::Trial || Phase == ECoachPhase::Ingrain) && Seconds >= SessionMinutes * 60.f)
+	HandlePass();
+	if ((Phase == ECoachPhase::Trial || Phase == ECoachPhase::Ingrain || Phase == ECoachPhase::Hands) && Seconds >= SessionMinutes * 60.f)
 	{
 		Phase = ECoachPhase::TooBig;
 		Advice = LOCTEXT("Timer", "Twenty minutes, and not there yet: more time would be wasted. Cut it in half and try again.");

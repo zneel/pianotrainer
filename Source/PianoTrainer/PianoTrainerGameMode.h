@@ -16,7 +16,9 @@ class UPianoPlayer;
 //   -drill=outline|longshort|shortlong|impulses|blockchords|accent3|accent4   -countin=<bars>
 //   -coach=<n> | -coach=s<k>   with -autotest: run session n of the piece's practice plan (made if missing), or
 //                        section k alone, until the coach says done or too big; -coachgroups starts note-groups,
-//                        -coachsplit cuts a too-big section in half; -diary=<file> keeps the test's diary apart
+//                        -coachsplit cuts a too-big section in half; -diary=<file> keeps the test's diary apart;
+//                        -coachhands=auto|separate|together (default auto); -autoerrorsuntil=<n>: mistakes only
+//                        among the first n notes
 //   -uishot=<s>          screenshot after s seconds (Saved/PianoLogs/ui.png), then quit; with -menupage=etudes|diary|library
 //                        and -sidebartab=practice|plan|visual to open on a page or tab
 UCLASS()
