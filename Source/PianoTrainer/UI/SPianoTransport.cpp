@@ -287,7 +287,7 @@ TSharedRef<SWidget> SPianoTransport::MetronomeLight(int32 Which)
 	[
 		SNew(SBorder)
 		.BorderImage(PianoStyle::Rounded(FLinearColor::White, 5.5f))
-		.BorderBackgroundColor_Lambda([this, Which, Lit]() { return LitBeat() == Which ? Lit : PianoStyle::Hex(TEXT("2A221C")); })
+		.BorderBackgroundColor_Lambda([this, Which, Lit]() { return LitBeat() == Which ? Lit : PianoStyle::Hex(TEXT("4A3E34")); })
 	];
 }
 

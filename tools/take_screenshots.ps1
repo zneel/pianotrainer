@@ -17,7 +17,7 @@ $Shots = @(
     @("etudes", "ui.png", @("-menupage=etudes", "-uishot=6")),
     @("diary", "ui.png", @("-menupage=diary", "-uishot=6", "-diary=`"$Diary`"")),
     @("settings", "ui.png", (@("-menupage=settings", "-uishot=8") + $Instrument)),
-    @("practice", "shot.png", (@("-autotest", "-listen", "-wait=0", "-shot=21000", "-stop=23000", "-sidebartab=practice", "-score=`"$Etude`"") + $Instrument)),
+    @("practice", "shot.png", (@("-autotest", "-listen", "-wait=0", "-shot=21000", "-stop=23000", "-metronome=1", "-sidebartab=practice", "-score=`"$Etude`"") + $Instrument)),
     @("plan", "shot.png", (@("-autotest", "-listen", "-wait=0", "-shot=9000", "-stop=11000", "-sidebartab=plan", "-score=`"$Etude`"") + $Instrument))
 )
 foreach ($Shot in $Shots) {
