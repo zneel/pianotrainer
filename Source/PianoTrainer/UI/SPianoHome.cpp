@@ -406,8 +406,16 @@ TSharedRef<SWidget> SPianoHome::MakeEtudesPage()
 			List->AddSlot().AutoHeight().Padding(FMargin(0.f, 14.f, 0.f, 8.f))[SectionLabel(FText::FromString(Opus.ToUpper()))];
 			List->AddSlot().AutoHeight()[SAssignNew(Row, SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(8.0, 8.0))];
 		}
-		// "No. 1 · Waterfall" over "C major"
+		// "Waterfall" over "No. 1 · C major" (the number alone when it has no nickname)
 		const FString Number = NoAt != INDEX_NONE ? E.Subtitle.Mid(NoAt + 1) : E.Subtitle;
+		FString No, Nickname;
+		if (!Number.Split(TEXT(" · "), &No, &Nickname))
+		{
+			No = Number;
+		}
+		const FString Key = E.Title.Replace(TEXT("Étude in "), TEXT(""));
+		const FString TileTitle = Nickname.IsEmpty() ? No : Nickname;
+		const FString TileSub = Nickname.IsEmpty() ? Key : No + TEXT(" · ") + Key;
 		Row->AddSlot()
 		[
 			SNew(SBox).WidthOverride(176.f).HeightOverride(76.f)
@@ -423,8 +431,8 @@ TSharedRef<SWidget> SPianoHome::MakeEtudesPage()
 					.Padding(FMargin(14.f, 10.f))
 					[
 						SNew(SVerticalBox)
-						+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(PianoStyle::Font(12, TEXT("Bold"))).ColorAndOpacity(PianoStyle::Text).Text(FText::FromString(Number))]
-						+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 3.f, 0.f, 0.f))[SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim).Text(FText::FromString(E.Title.Replace(TEXT("Étude in "), TEXT(""))))]
+						+ SVerticalBox::Slot().AutoHeight()[SNew(STextBlock).Font(PianoStyle::Font(12, TEXT("Bold"))).ColorAndOpacity(PianoStyle::Text).Text(FText::FromString(TileTitle))]
+						+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 3.f, 0.f, 0.f))[SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim).Text(FText::FromString(TileSub))]
 					]
 				]
 			]
