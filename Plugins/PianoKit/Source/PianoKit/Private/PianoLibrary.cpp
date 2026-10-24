@@ -1,8 +1,11 @@
 #include "PianoLibrary.h"
 
+#include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 #define LOCTEXT_NAMESPACE "PianoLibrary"
 
@@ -126,9 +129,42 @@ TArray<FPianoLibraryEntry> FPianoLibrary::Scan(const TArray<FString>& RecentPath
 		Entry.Title = FString::Printf(TEXT("Étude in %s"), E.Key);
 		Entry.Subtitle = FCString::Strlen(E.Nickname) > 0 ? FString::Printf(TEXT("%s · %s"), E.Number, E.Nickname) : FString(E.Number);
 		Entry.Collection = TEXT("Chopin · Études");
+		Entry.Composer = TEXT("Chopin");
 		Entry.Focus = E.Focus;
 		Entry.Drills = E.Drills;
 		Entry.bBuiltIn = true;
+	}
+
+	// the composers' library, from its catalog: { "pieces": [ { "file", "composer", "collection", "title", "subtitle",
+	// "credit" } ] } (file relative to Scores)
+	FString Catalog;
+	TSharedPtr<FJsonObject> Root;
+	if (FFileHelper::LoadFileToString(Catalog, *(Dir / TEXT("Library/catalog.json")))
+		&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Catalog), Root) && Root.IsValid())
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Pieces = nullptr;
+		if (Root->TryGetArrayField(TEXT("pieces"), Pieces))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *Pieces)
+			{
+				const TSharedPtr<FJsonObject> Piece = Value->AsObject();
+				const FString File = Piece.IsValid() ? Piece->GetStringField(TEXT("file")) : FString();
+				if (File.IsEmpty() || !FPaths::FileExists(Dir / File))
+				{
+					continue;
+				}
+				FPianoLibraryEntry& Entry = Out.AddDefaulted_GetRef();
+				Entry.Path = Dir / File;
+				Entry.File = File;
+				Entry.Title = Piece->GetStringField(TEXT("title"));
+				Piece->TryGetStringField(TEXT("subtitle"), Entry.Subtitle);
+				Entry.Collection = Piece->GetStringField(TEXT("collection"));
+				Entry.Composer = Piece->GetStringField(TEXT("composer"));
+				Piece->TryGetStringField(TEXT("credit"), Entry.Credit);
+				Entry.Drills = { EPianoDrill::LongShort, EPianoDrill::BlockChords, EPianoDrill::AccentFour };
+				Entry.bBuiltIn = true;
+			}
+		}
 	}
 
 	TArray<FString> Files;
@@ -137,7 +173,7 @@ TArray<FPianoLibraryEntry> FPianoLibrary::Scan(const TArray<FString>& RecentPath
 	for (const FString& Path : Files)
 	{
 		const FString File = ToScoresRelative(Path);
-		if (!IsScoreFile(Path) || File.StartsWith(TEXT("Etudes/Chopin/")))
+		if (!IsScoreFile(Path) || File.StartsWith(TEXT("Etudes/Chopin/")) || File.StartsWith(TEXT("Library/")))
 		{
 			continue;
 		}

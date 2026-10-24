@@ -3,12 +3,14 @@
 //   Etudes   - Chopin Op. 10 and Op. 25: each with its key, nickname, what it trains and the drills that suit it
 //   Diary    - practice days this week, what is due (sections to check or play through, pieces to relearn), each
 //              piece's plan progress, and the latest sessions (Bernhard: keep a practice diary)
-//   Library  - the bundled samples, recent files, open a file
+//   Library  - every piece: the composers' library (by composer and collection, searchable), the bundled samples and
+//              recent files; open a file
 //   Settings - display, sound (the piano samples), MIDI keyboard, playback (SPianoSettingsPage); and Quit
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
+#include "Widgets/Views/SListView.h"
 
 class FPianoCoach;
 class SBox;
@@ -47,6 +49,19 @@ private:
 	TSharedRef<SWidget> MakeDiary();
 	TSharedRef<SWidget> MakeCard(const FText& Kicker, const FText& Title, const FText& Body, TAttribute<FText> Footer, TFunction<void()> OnClick, bool bFeatured = false);
 	TSharedRef<SWidget> MakeEtudeDetail();
+
+	// the Library page's list: a collection's heading, or a piece (index into Library())
+	struct FLibraryRow
+	{
+		FString Header;
+		int32 Entry = INDEX_NONE;
+	};
+	void RebuildLibraryRows();
+	TSharedRef<ITableRow> MakeLibraryRow(TSharedPtr<FLibraryRow> Row, const TSharedRef<STableViewBase>& Owner);
+	TSharedPtr<SListView<TSharedPtr<FLibraryRow>>> LibraryList;
+	TArray<TSharedPtr<FLibraryRow>> LibraryRows;
+	FString LibrarySearch;
+	FString LibraryComposer; // empty: everything; "-": your scores (samples, recent files)
 
 	TFunction<const TArray<FPianoLibraryEntry>&()> Library;
 	TFunction<TArray<FPianoLibraryEntry>()> RecentEntries;

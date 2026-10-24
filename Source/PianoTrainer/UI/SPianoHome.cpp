@@ -9,6 +9,7 @@
 #include "PianoLibrary.h"
 
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -92,7 +93,7 @@ void SPianoHome::Construct(const FArguments& InArgs)
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[MakeHomePage()]]
 				+ SWidgetSwitcher::Slot()[MakeEtudesPage()]
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[SAssignNew(DiaryBox, SBox)[MakeDiary()]]]
-				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[MakeLibraryPage()]]
+				+ SWidgetSwitcher::Slot()[SNew(SBox).Padding(FMargin(40.f, 34.f, 40.f, 0.f))[MakeLibraryPage()]] // the list scrolls itself
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[SNew(SPianoSettingsPage).Player(Player)]]
 			]
 		]
@@ -109,6 +110,7 @@ void SPianoHome::Refresh()
 	{
 		DiaryBox->SetContent(MakeDiary());
 	}
+	RebuildLibraryRows(); // the recent files may have changed
 }
 
 TSharedRef<SWidget> SPianoHome::MakeRail()
@@ -518,37 +520,135 @@ TSharedRef<SWidget> SPianoHome::MakeEtudeDetail()
 TSharedRef<SWidget> SPianoHome::MakeLibraryPage()
 {
 	using namespace PianoHomeImpl;
-	TSharedRef<SVerticalBox> List = SNew(SVerticalBox);
+	// a chip per composer in the library, then the player's own scores
+	TArray<FString> Composers;
 	for (const FPianoLibraryEntry& E : Library())
 	{
-		if (E.File.StartsWith(TEXT("Etudes/")))
+		if (!E.Composer.IsEmpty())
+		{
+			Composers.AddUnique(E.Composer);
+		}
+	}
+	Composers.Sort();
+	TSharedRef<SWrapBox> Chips = SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(6.0, 6.0));
+	auto AddChip = [this, &Chips](const FText& Label, const FString& Key)
+	{
+		Chips->AddSlot()
+		[
+			PianoUI::Button(Label, [this, Key]() { LibraryComposer = Key; RebuildLibraryRows(); }, PianoUI::EButton::Chip,
+				TAttribute<bool>::CreateLambda([this, Key]() { return LibraryComposer == Key; }), true, 10)
+		];
+	};
+	AddChip(LOCTEXT("AllComposers", "All"), FString());
+	for (const FString& Composer : Composers)
+	{
+		AddChip(FText::FromString(Composer), Composer);
+	}
+	AddChip(LOCTEXT("YourScores", "Your scores"), TEXT("-"));
+
+	static const FTableViewStyle NoBackground = FTableViewStyle().SetBackgroundBrush(FSlateNoResource());
+	SAssignNew(LibraryList, SListView<TSharedPtr<FLibraryRow>>)
+		.ListViewStyle(&NoBackground)
+		.ListItemsSource(&LibraryRows)
+		.SelectionMode(ESelectionMode::None)
+		.OnGenerateRow_Lambda([this](TSharedPtr<FLibraryRow> Row, const TSharedRef<STableViewBase>& Owner) { return MakeLibraryRow(Row, Owner); });
+	RebuildLibraryRows();
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()[PageTitle(LOCTEXT("LibraryTitle", "Library"), LOCTEXT("LibrarySub", "The composers' works, the samples that come with the app and the scores you opened. Drop a MusicXML file on the window to open it."))]
+		+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.f, 0.f, 0.f, 12.f))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)[Chips]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(12.f, 0.f))
+			[
+				SNew(SBox).WidthOverride(260.f)
+				[
+					SNew(SSearchBox)
+					.HintText(LOCTEXT("SearchHint", "Search: nocturne, op. 28, fugue..."))
+					.OnTextChanged_Lambda([this](const FText& Text) { LibrarySearch = Text.ToString().TrimStartAndEnd(); RebuildLibraryRows(); })
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				PianoUI::Button(LOCTEXT("Browse", "Open a score…"), [this]() { if (OnOpenFile) { OnOpenFile(); } }, PianoUI::EButton::Primary, false, true, 11)
+			]
+		]
+		+ SVerticalBox::Slot().FillHeight(1.f)[LibraryList.ToSharedRef()];
+}
+
+void SPianoHome::RebuildLibraryRows()
+{
+	LibraryRows.Reset();
+	if (!Library)
+	{
+		return;
+	}
+	const TArray<FPianoLibraryEntry>& Entries = Library();
+	FString LastGroup;
+	for (int32 Index = 0; Index < Entries.Num(); ++Index)
+	{
+		const FPianoLibraryEntry& E = Entries[Index];
+		const bool bYours = E.Composer.IsEmpty();
+		if (LibraryComposer == TEXT("-") ? !bYours : !LibraryComposer.IsEmpty() && E.Composer != LibraryComposer)
 		{
 			continue;
 		}
-		const FPianoLibraryEntry Copy = E;
-		List->AddSlot().AutoHeight().Padding(FMargin(0.f, 3.f))
+		if (!LibrarySearch.IsEmpty() && !E.Title.Contains(LibrarySearch) && !E.Subtitle.Contains(LibrarySearch)
+			&& !E.Collection.Contains(LibrarySearch) && !E.Composer.Contains(LibrarySearch))
+		{
+			continue;
+		}
+		// "Chopin · Nocturnes"; the samples and recent files under their own heading
+		const FString Group = bYours || E.Collection.StartsWith(E.Composer) ? E.Collection : E.Composer + TEXT(" · ") + E.Collection;
+		if (Group != LastGroup)
+		{
+			LastGroup = Group;
+			LibraryRows.Add(MakeShared<FLibraryRow>(FLibraryRow{ Group, INDEX_NONE }));
+		}
+		LibraryRows.Add(MakeShared<FLibraryRow>(FLibraryRow{ FString(), Index }));
+	}
+	if (LibraryList.IsValid())
+	{
+		LibraryList->RequestListRefresh();
+	}
+}
+
+TSharedRef<ITableRow> SPianoHome::MakeLibraryRow(TSharedPtr<FLibraryRow> Row, const TSharedRef<STableViewBase>& Owner)
+{
+	using namespace PianoHomeImpl;
+	// rows without the list's own highlight: the cards have theirs
+	static const FTableRowStyle Plain = FTableRowStyle(FCoreStyle::Get().GetWidgetStyle<FTableRowStyle>("TableView.Row"))
+		.SetEvenRowBackgroundBrush(FSlateNoResource()).SetEvenRowBackgroundHoveredBrush(FSlateNoResource())
+		.SetOddRowBackgroundBrush(FSlateNoResource()).SetOddRowBackgroundHoveredBrush(FSlateNoResource())
+		.SetActiveBrush(FSlateNoResource()).SetActiveHoveredBrush(FSlateNoResource())
+		.SetInactiveBrush(FSlateNoResource()).SetInactiveHoveredBrush(FSlateNoResource())
+		.SetActiveHighlightedBrush(FSlateNoResource()).SetInactiveHighlightedBrush(FSlateNoResource())
+		.SetSelectorFocusedBrush(FSlateNoResource());
+	if (!Row.IsValid() || Row->Entry == INDEX_NONE || !Library().IsValidIndex(Row->Entry))
+	{
+		return SNew(STableRow<TSharedPtr<FLibraryRow>>, Owner).Style(&Plain).Padding(FMargin(0.f, 14.f, 0.f, 6.f))
 		[
-			SNew(SButton)
-			.ButtonStyle(&CardStyle())
-			.IsFocusable(false)
-			.OnClicked_Lambda([this, Copy]() { if (OnPractise) { OnPractise(Copy); } return FReply::Handled(); })
-			[
-				SNew(SBox).Padding(FMargin(16.f, 10.f))
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().FillWidth(1.f)[SNew(STextBlock).Font(PianoStyle::Font(12, TEXT("Bold"))).ColorAndOpacity(PianoStyle::Text).Text(FText::FromString(E.Title))]
-					+ SHorizontalBox::Slot().AutoWidth()[SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint).Text(FText::FromString(E.Collection + (E.Subtitle.IsEmpty() ? FString() : TEXT(" · ") + E.Subtitle)))]
-				]
-			]
+			SectionLabel(FText::FromString(Row.IsValid() ? Row->Header.ToUpper() : FString()))
 		];
 	}
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()[PageTitle(LOCTEXT("LibraryTitle", "Library"), LOCTEXT("LibrarySub", "Samples that come with the app and the scores you opened. Drop a MusicXML file on the window to open it."))]
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(FMargin(0.f, 0.f, 0.f, 14.f))
+	const FPianoLibraryEntry E = Library()[Row->Entry];
+	return SNew(STableRow<TSharedPtr<FLibraryRow>>, Owner).Style(&Plain).Padding(FMargin(0.f, 3.f, 12.f, 3.f))
+	[
+		SNew(SButton)
+		.ButtonStyle(&CardStyle())
+		.IsFocusable(false)
+		.ToolTipText(FText::FromString(E.Credit))
+		.OnClicked_Lambda([this, E]() { if (OnPractise) { OnPractise(E); } return FReply::Handled(); })
 		[
-			PianoUI::Button(LOCTEXT("Browse", "Open a score…"), [this]() { if (OnOpenFile) { OnOpenFile(); } }, PianoUI::EButton::Primary, false, true, 12)
+			SNew(SBox).Padding(FMargin(16.f, 9.f))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)[SNew(STextBlock).Font(PianoStyle::Font(12, TEXT("Bold"))).ColorAndOpacity(PianoStyle::Text).Text(FText::FromString(E.Title))]
+				+ SHorizontalBox::Slot().AutoWidth()[SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextFaint).Text(FText::FromString(E.Subtitle))]
+			]
 		]
-		+ SVerticalBox::Slot().AutoHeight()[List];
+	];
 }
 
 #undef LOCTEXT_NAMESPACE
