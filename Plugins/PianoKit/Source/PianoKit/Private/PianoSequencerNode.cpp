@@ -42,6 +42,7 @@ namespace PianoKit::SequencerNode
 	static constexpr double FinishPadMs = 400.0;
 	static constexpr uint8 ClickChannel = 9;           // count-in clicks go out as notes on the drum channel
 	static constexpr int32 ClickAccentPitch = 76, ClickPitch = 77;
+	static constexpr int32 CountInVelocity = 100, MetronomeVelocity = 40; // the metronome clicks lightly
 
 	class FPianoSequencerOperator final : public TExecutableOperator<FPianoSequencerOperator>
 	{
@@ -111,6 +112,8 @@ namespace PianoKit::SequencerNode
 			Pedals.Reset();
 			PedalsVersion = 0;
 			NextPedal = 0;
+			BeatsVersion = 0;
+			NextBeat = 0;
 			bScorePedalDown = false;
 			Sounding.Reset();
 			LiveDown.Init(false, 128);
@@ -152,6 +155,7 @@ namespace PianoKit::SequencerNode
 			}
 			SyncNotes();
 			SyncPedals();
+			SyncBeats();
 			const uint8 Hands = Session->UserHands.load(std::memory_order_relaxed);
 			const bool bListen = Session->bPlayUserHands.load(std::memory_order_relaxed);
 			if (Hands != GroupsHands)
@@ -215,6 +219,7 @@ namespace PianoKit::SequencerNode
 				}
 				CountInTotal = Session->CountInBeats.load(std::memory_order_relaxed);
 				CountInElapsedMs = 0.0;
+				CountInClicked = 0;
 				bCountIn = CountInTotal > 0;
 			}
 			bWasPlaying = bPlaying;
@@ -302,18 +307,33 @@ namespace PianoKit::SequencerNode
 		{
 			const double BeatMs = FMath::Max(100.0, Session->CountInBeatMs.load(std::memory_order_relaxed) / Rate);
 			const double BlockMs = 1000.0 * FramesPerBlock / SampleRate;
-			for (int32 Beat = FMath::CeilToInt32(CountInElapsedMs / BeatMs - 1e-9); Beat < CountInTotal && Beat * BeatMs < CountInElapsedMs + BlockMs; ++Beat)
+			// counted, not recomputed: a click exactly on a block boundary went out in both blocks
+			for (; CountInClicked < CountInTotal && CountInClicked * BeatMs < CountInElapsedMs + BlockMs; ++CountInClicked)
 			{
-				const int32 Frame = FMath::Clamp(int32((Beat * BeatMs - CountInElapsedMs) * SampleRate / 1000.0), 0, FramesPerBlock - 1);
-				FMidiStreamEvent Event(&ClickVoices, FMidiMsg::CreateNoteOn(ClickChannel, Beat == 0 ? ClickAccentPitch : ClickPitch, 100));
-				Event.BlockSampleFrameIndex = Frame;
-				Event.TrackIndex = MidiTrack;
-				MidiOut->InsertMidiEvent(Event);
+				const int32 Frame = FMath::Clamp(int32((CountInClicked * BeatMs - CountInElapsedMs) * SampleRate / 1000.0), 0, FramesPerBlock - 1);
+				EmitClick(Frame, CountInClicked == 0, CountInVelocity);
 			}
 			CountInElapsedMs += BlockMs;
 			const int32 BeatsLeft = CountInTotal - FMath::FloorToInt32(CountInElapsedMs / BeatMs);
 			bCountIn = BeatsLeft > 0;
 			Session->CountInLeft.store(FMath::Max(0, BeatsLeft), std::memory_order_relaxed);
+		}
+
+		void EmitClick(int32 Frame, bool bAccent, int32 Velocity)
+		{
+			FMidiStreamEvent Event(&ClickVoices, FMidiMsg::CreateNoteOn(ClickChannel, bAccent ? ClickAccentPitch : ClickPitch, Velocity));
+			Event.BlockSampleFrameIndex = Frame;
+			Event.TrackIndex = MidiTrack;
+			MidiOut->InsertMidiEvent(Event);
+		}
+
+		void SyncBeats()
+		{
+			if (Session->GetBeatsVersion() != BeatsVersion)
+			{
+				Beats = Session->GetBeats(BeatsVersion);
+				NextBeat = Algo::LowerBoundBy(*Beats, SongMs, [](const FVector2D& B) { return B.X; });
+			}
 		}
 
 		void ResolveSession()
@@ -429,6 +449,10 @@ namespace PianoKit::SequencerNode
 				NextPedal = Algo::LowerBoundBy(*Pedals, SongMs, [](const FVector2D& P) { return P.X; });
 				SetScorePedal(0, Session->bScorePedal.load(std::memory_order_relaxed) && ScorePedalAt(SongMs));
 			}
+			if (Beats.IsValid())
+			{
+				NextBeat = Algo::LowerBoundBy(*Beats, SongMs - 0.5, [](const FVector2D& B) { return B.X; }); // a beat right here clicks
+			}
 			for (int32 Index = NextOnIndex; Index < Hit.Num(); ++Index)
 			{
 				Hit[Index] = 0;
@@ -464,6 +488,17 @@ namespace PianoKit::SequencerNode
 					SetScorePedal(FrameOf((*Pedals)[NextPedal].X), (*Pedals)[NextPedal].Y > 0.5);
 				}
 				++NextPedal;
+			}
+
+			// the metronome: a light click on each beat the music passes (none while wait mode holds the clock)
+			const bool bMetronome = Session->bMetronome.load(std::memory_order_relaxed);
+			while (Beats.IsValid() && NextBeat < Beats->Num() && (*Beats)[NextBeat].X < TargetMs)
+			{
+				if (bMetronome && (*Beats)[NextBeat].X >= FromMs - 0.5)
+				{
+					EmitClick(FrameOf((*Beats)[NextBeat].X), (*Beats)[NextBeat].Y > 0.5, MetronomeVelocity);
+				}
+				++NextBeat;
 			}
 
 			const bool bListen = Session->bPlayUserHands.load(std::memory_order_relaxed);
@@ -654,6 +689,9 @@ namespace PianoKit::SequencerNode
 		FPianoSession::FPedalListPtr Pedals;
 		uint32 PedalsVersion = 0;
 		int32 NextPedal = 0;
+		FPianoSession::FPedalListPtr Beats;
+		uint32 BeatsVersion = 0;
+		int32 NextBeat = 0;
 		bool bScorePedalDown = false;
 		double LastOffMs = 0.0;
 
@@ -677,6 +715,7 @@ namespace PianoKit::SequencerNode
 		bool bCountIn = false;
 		int32 CountInTotal = 0;
 		double CountInElapsedMs = 0.0;
+		int32 CountInClicked = 0;
 	};
 
 	using FPianoSequencerNode = Metasound::TNodeFacade<FPianoSequencerOperator>;

@@ -55,6 +55,7 @@ bool UPianoPlayer::Initialize(UWorld* World)
 {
 	Session = MakeShared<FPianoSession, ESPMode::ThreadSafe>();
 	SessionId = FPianoSession::Register(Session.ToSharedRef());
+	Session->bMetronome.store(bMetronome, std::memory_order_relaxed); // set before the player started
 	Held.Init(false, 128);
 	PressResult.Init(-1, 128);
 	WrongFlashSeconds.Init(-1000.0, 128);
@@ -679,6 +680,20 @@ void UPianoPlayer::ApplyScore(const TSharedPtr<FPianoScore>& NewScore)
 	ClearLoop();
 	RebuildPlayNotes();
 	Session->SetPedals(TArray<FVector2D>(Score->GetMarks().Pedals));
+	// the metronome's beats; the first of a bar is the one at a measure's start
+	Beats.Reset();
+	int32 Measure = 0;
+	const int32 NumMeasures = Score->GetMeasures().Num();
+	for (const double BeatMs : Score->GetBeatTimes())
+	{
+		while (Measure + 1 < NumMeasures && Score->GetMeasureStartMs(Measure + 1) <= BeatMs + 2.0)
+		{
+			++Measure;
+		}
+		const bool bDownbeat = NumMeasures > 0 && FMath::Abs(Score->GetMeasureStartMs(Measure) - BeatMs) <= 2.0;
+		Beats.Add(FVector2D(BeatMs, bDownbeat ? 1.0 : 0.0));
+	}
+	Session->SetBeats(TArray<FVector2D>(Beats));
 	UpdateScorePedal();
 	ResetFeedback();
 	Session->PushSeek(0.0);
@@ -974,6 +989,15 @@ void UPianoPlayer::SetExpressive(bool bEnabled)
 		const double Now = GetSongMs();
 		RebuildPlayNotes();
 		Seek(Now);
+	}
+}
+
+void UPianoPlayer::SetMetronome(bool bOn)
+{
+	bMetronome = bOn;
+	if (Session.IsValid())
+	{
+		Session->bMetronome.store(bOn, std::memory_order_relaxed);
 	}
 }
 

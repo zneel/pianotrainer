@@ -163,6 +163,11 @@ public:
 	// The score's pedal marks with what the app plays; once the player uses their own pedal, theirs (except listening).
 	void SetScorePedal(bool bEnabled);
 	bool GetScorePedal() const { return bScorePedalSetting; }
+	// A light click on every beat while the music plays, the bar's first beat accented.
+	void SetMetronome(bool bOn);
+	bool GetMetronome() const { return bMetronome; }
+	// The score's beats (X: song ms, Y: 1 on a bar's first beat), for the metronome's lights.
+	const TArray<FVector2D>& GetBeats() const { return Beats; }
 	bool IsScorePedalActive() const;
 	void SetEchoLiveKeys(bool bEnabled); // sound the player's own keys (off if the piano makes its own sound)
 	bool GetEchoLiveKeys() const;
@@ -293,6 +298,8 @@ private:
 	void UpdateScorePedal();
 	FString InstrumentPath;
 	UWorld* InstrumentWorld = nullptr;
+	TArray<FVector2D> Beats;
+	bool bMetronome = false;
 	TWeakPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Plugin; // the session's synth owns it
 	FString PluginError;
 	bool LoadPlugin(UWorld* World, float SampleRate);

@@ -171,9 +171,10 @@ namespace PianoKit::SfizzNode
 				{
 					(Msg.GetStdData2() >= 64 ? StatPedalDown : StatPedalUp)++;
 				}
-				if (MidiDump && Msg.IsStd() && Msg.GetStdChannel() != ClickChannel)
+				if (MidiDump && Msg.IsStd())
 				{
-					// -mididump: what the instrument is sent, in order: block, frame, status, data1, data2
+					// -mididump: what the instrument is sent (and the clicks, on channel 10), in order: block, frame, status,
+					// data1, data2
 					const FString Line = FString::Printf(TEXT("%lld,%d,%d,%d,%d\n"), DumpBlock, Frame, Msg.GetStdStatus(), Msg.GetStdData1(), Msg.GetStdData2());
 					MidiDump->Serialize(const_cast<ANSICHAR*>(StringCast<ANSICHAR>(*Line).Get()), Line.Len());
 				}
@@ -186,7 +187,7 @@ namespace PianoKit::SfizzNode
 				{
 					if (Msg.IsNoteOn())
 					{
-						StartClick(Frame, Msg.GetStdData1() == ClickAccentPitch);
+						StartClick(Frame, Msg.GetStdData1() == ClickAccentPitch, Msg.GetStdData2());
 					}
 					continue;
 				}
@@ -311,13 +312,14 @@ namespace PianoKit::SfizzNode
 			}
 		}
 
-		// A short woodblock-like tick: a decaying sine burst, higher and louder on the accented beat.
-		void StartClick(int32 Frame, bool bAccent)
+		// A short woodblock-like tick: a decaying sine burst, higher and louder on the accented beat; as loud as its
+		// velocity says (the count-in 100, the metronome lighter).
+		void StartClick(int32 Frame, bool bAccent, int32 Velocity)
 		{
 			ClickStartFrame = Frame;
 			ClickPhase = 0.f;
 			ClickFreq = bAccent ? 2093.f : 1568.f; // C7 / G6
-			ClickAmp = bAccent ? 0.32f : 0.22f;
+			ClickAmp = (bAccent ? 0.32f : 0.22f) * FMath::Clamp(Velocity, 1, 127) / 100.f;
 			ClickDecay = FMath::Exp(-1.f / (0.009f * SampleRate));
 		}
 

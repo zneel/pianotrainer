@@ -21,5 +21,8 @@ public:
 private:
 	void StepMeasure(int32 Delta);
 	void ToggleLoop();
+	void ToggleMetronome();
+	TSharedRef<SWidget> MetronomeLight(int32 Which); // 1: the bar's first beat, 2: the others
+	int32 LitBeat() const;
 	TWeakObjectPtr<UPianoPlayer> Player;
 };

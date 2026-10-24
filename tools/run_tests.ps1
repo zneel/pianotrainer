@@ -35,6 +35,8 @@ $Tests = [ordered]@{
     "ode_drill_acc" = @("-autotest", $Ode, "-wait=0", "-drill=accent3")
     "ode_outline"   = @("-autotest", $Ode, "-wait=0", "-drill=outline")
     "ode_countin"   = @("-autotest", $Ode, "-wait=0", "-countin=1", "-recordwav", "-stop=6000")
+    # the metronome: from the dump of what the instrument is sent, the count-in clicks and the light beat clicks
+    "ode_metronome" = @("-autotest", $Ode, "-listen", "-wait=0", "-countin=1", "-metronome=1", "-mididump", "-stop=6000")
     "stress_200"    = @("-autotest", "-listen", "-tempo=2", "-recordwav", "-score=`"$Stress`"")
     "etude_10_5"    = @("-autotest", "-wait=0", "-hands=right", "-stop=20000", "-score=`"$Etudes\010-1b-Sm-005.krn`"")
     # practice plans cut at phrases; plan_phrases also edits the plan on the ruler with mouse events
@@ -148,6 +150,20 @@ foreach ($Name in $Tests.Keys) {
             $Line += "  {0}: {1}, {2}/{3} clean (target {4}), groups {5}, stage {6}, sections {7}" -f $J.coach_label, $J.coach_phases, $J.coach_clean, $J.coach_passes, $J.coach_target, $J.coach_group_passes, $J.section_stage, $J.plan_sections
             if ($J.sections_after_split -ge 0) { $Line += " (split {0}->{1})" -f $J.sections_before_split, $J.sections_after_split }
             if ($J.coach_hand_turns) { $Line += ", hands {0}" -f $J.coach_hand_turns }
+        }
+        if ($Name -eq "ode_metronome") {
+            # clicks (channel 10) in ms from the first note: 4 count-in clicks at velocity 100, then one at velocity 40
+            # every 600 ms, accented (pitch 76) every 4th
+            $Rows = Get-Content (Join-Path $Logs "mididump.csv") | ForEach-Object { , ($_ -split ",") } | Where-Object { $_[1] -ne "-1" }
+            $First = ($Rows | Where-Object { [int]$_[2] -eq 144 -and [int]$_[4] -gt 0 } | Select-Object -First 1)
+            $T0 = [int]$First[0] * 256 + [int]$First[1]
+            $Clicks = @($Rows | Where-Object { [int]$_[2] -eq 153 } | ForEach-Object { [PSCustomObject]@{ Ms = ([int]$_[0] * 256 + [int]$_[1] - $T0) / 48.0; Accent = [int]$_[3] -eq 76; Vel = [int]$_[4] } })
+            $CountIn = @($Clicks | Where-Object { $_.Vel -eq 100 })
+            $Beats = @($Clicks | Where-Object { $_.Vel -eq 40 })
+            $Even = $true
+            for ($I = 0; $I -lt $Beats.Count; $I++) { if ([math]::Abs($Beats[$I].Ms - 600 * $I) -gt 1 -or $Beats[$I].Accent -ne ($I % 4 -eq 0)) { $Even = $false } }
+            $Ok = $CountIn.Count -eq 4 -and $Beats.Count -ge 8 -and $Even
+            $Line += "  count-in {0} clicks, metronome {1} clicks on the beat: {2}" -f $CountIn.Count, $Beats.Count, $(if ($Ok) { "PASS" } else { "FAIL" })
         }
         if ($Name -like "vst3_*") {
             $TestLog = Get-Content (Join-Path $Root "Saved\Logs\test_$Name.log") -Raw

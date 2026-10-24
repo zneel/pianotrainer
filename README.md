@@ -65,7 +65,10 @@ keyboard under it, the measure ruler (click a measure to jump, drag across measu
 run along its top - grey new, gold learned, green mastered, paler for a passage that comes back - and can be edited
 there: drag an edge to move it, onto the next edge to merge, double-click a section to split it at that bar) and the
 transport bar (piece and progress, measure
-counter, restart / measure back / play-pause / measure forward, speed knob, loop) at the bottom, and the sidebar:
+counter, restart / measure back / play-pause / measure forward, speed knob, metronome, loop) at the bottom, and the
+sidebar. The metronome clicks lightly on every beat of the score while the music plays (beat 1 of the bar accented,
+silent while wait mode holds the clock), and its two lights flash with it: gold on beat 1, white on the others. The
+sidebar:
 - *Plan tab* (the first): the practice plan (below).
 - *Practice tab:* mode (**Wait** for me / **Play along** / **Listen**), hand, my keys sound, input latency, count-in
   (1 or 2 bars of clicks), **practice tools** by problem (★ = suits this étude; the accent tools also report how
@@ -225,7 +228,7 @@ piece.
 - `-uishot=<s>` saves a screenshot of whatever is on screen (the menu too) and quits;
   `-menupage=etudes|diary|library|settings` and `-sidebartab=practice|plan|visual` open the app on that page or tab.
 - Sound: `-quiet` (the battery always passes it: nothing from the speakers, the recording is taken before the main
-  output's volume), `-listen`, `-instrument=<.sfz or .vst3>`, `-expressive=0|1`, `-scorepedal=0|1`, `-quality=N`
+  output's volume), `-listen`, `-instrument=<.sfz or .vst3>`, `-expressive=0|1`, `-scorepedal=0|1`, `-metronome=0|1`, `-quality=N`
   (sfizz interpolation), `-voices=N`, `-instrumentcc=20:0,21:0` (instrument controls, 0..1), `-audiostats` (each
   second: the instrument's render time against the block, the longest gap between blocks, voices, peak, limiter, pedal
   and note messages), `-mididump` (every message the instrument gets, and its voices after each block, to

@@ -16,6 +16,7 @@ struct FPianoAppSettings
 	bool bPedalInverted = false;
 	bool bExpressive = true;    // play the score with its dynamics, voicing and articulation
 	bool bScorePedal = true;    // and its pedal marks
+	bool bMetronome = false;    // the light click on every beat (the transport's metronome)
 	bool bVSync = true;
 
 	void Load();

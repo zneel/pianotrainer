@@ -1,11 +1,13 @@
 #include "SPianoTransport.h"
 
+#include "PianoAppSettings.h"
 #include "PianoStyle.h"
 #include "PianoWidgets.h"
 
 #include "PianoPlayer.h"
 #include "PianoScore.h"
 
+#include "Algo/BinarySearch.h"
 #include "Rendering/DrawElements.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
@@ -223,6 +225,34 @@ void SPianoTransport::Construct(const FArguments& InArgs)
 					]
 				]
 			]
+			// metronome: a light click on every beat, and its two lights (the bar's first beat, the others)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(4.f, 7.f))
+			[
+				SNew(SPianoPlate).Label(LOCTEXT("Metronome", "METRONOME")).Padding(FMargin(14.f, 6.f))
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+					[
+						SNew(SButton)
+						.ButtonStyle(FCoreStyle::Get(), "NoBorder")
+						.IsFocusable(false)
+						.OnClicked_Lambda([this]() { ToggleMetronome(); return FReply::Handled(); })
+						[
+							SNew(SBorder)
+							.BorderImage(PianoStyle::Rounded(FLinearColor::White, 4.f))
+							.BorderBackgroundColor_Lambda([this]() { const UPianoPlayer* P = Player.Get(); return P && P->GetMetronome() ? PianoStyle::Gold : PianoStyle::Hex(TEXT("0A0807")); })
+							.Padding(FMargin(10.f, 5.f))
+							[
+								SNew(STextBlock).Font(PianoStyle::Font(9, TEXT("Bold")))
+								.ColorAndOpacity_Lambda([this]() { const UPianoPlayer* P = Player.Get(); return FSlateColor(P && P->GetMetronome() ? PianoStyle::Hex(TEXT("1A120A")) : PianoStyle::TextDim); })
+								.Text_Lambda([this]() { const UPianoPlayer* P = Player.Get(); return P && P->GetMetronome() ? LOCTEXT("On", "ON") : LOCTEXT("Off", "OFF"); })
+							]
+						]
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(10.f, 0.f, 0.f, 0.f))[MetronomeLight(1)]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(6.f, 0.f, 0.f, 0.f))[MetronomeLight(2)]
+				]
+			]
 			// loop
 			+ SHorizontalBox::Slot().AutoWidth().Padding(FMargin(4.f, 7.f, 8.f, 7.f))
 			[
@@ -248,6 +278,47 @@ void SPianoTransport::Construct(const FArguments& InArgs)
 			+ SHorizontalBox::Slot().AutoWidth()[Wood()]
 		]
 	];
+}
+
+TSharedRef<SWidget> SPianoTransport::MetronomeLight(int32 Which)
+{
+	const FLinearColor Lit = Which == 1 ? PianoStyle::Gold : PianoStyle::Hex(TEXT("F2E6D2"));
+	return SNew(SBox).WidthOverride(11.f).HeightOverride(11.f)
+	[
+		SNew(SBorder)
+		.BorderImage(PianoStyle::Rounded(FLinearColor::White, 5.5f))
+		.BorderBackgroundColor_Lambda([this, Which, Lit]() { return LitBeat() == Which ? Lit : PianoStyle::Hex(TEXT("2A221C")); })
+	];
+}
+
+int32 SPianoTransport::LitBeat() const
+{
+	const UPianoPlayer* P = Player.Get();
+	if (!P || !P->GetMetronome() || !P->IsPlaying() || P->IsWaiting() || P->GetCountInLeft() > 0)
+	{
+		return 0;
+	}
+	// the beat the music is on, for 120 ms of real time after it
+	const TArray<FVector2D>& Beats = P->GetBeats();
+	const double Ms = P->GetSongMs();
+	const int32 Index = Algo::UpperBoundBy(Beats, Ms, [](const FVector2D& Beat) { return Beat.X; }) - 1;
+	if (!Beats.IsValidIndex(Index) || Ms - Beats[Index].X > 120.0 * P->GetTempoScale())
+	{
+		return 0;
+	}
+	return Beats[Index].Y > 0.5 ? 1 : 2;
+}
+
+void SPianoTransport::ToggleMetronome()
+{
+	if (UPianoPlayer* P = Player.Get())
+	{
+		P->SetMetronome(!P->GetMetronome());
+		FPianoAppSettings Settings; // kept for next time
+		Settings.Load();
+		Settings.bMetronome = P->GetMetronome();
+		Settings.Save();
+	}
 }
 
 void SPianoTransport::StepMeasure(int32 Delta)

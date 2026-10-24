@@ -22,6 +22,7 @@ void FPianoAppSettings::Load()
 	GConfig->GetBool(Section, TEXT("PedalInverted"), bPedalInverted, GGameUserSettingsIni);
 	GConfig->GetBool(Section, TEXT("Expressive"), bExpressive, GGameUserSettingsIni);
 	GConfig->GetBool(Section, TEXT("ScorePedal"), bScorePedal, GGameUserSettingsIni);
+	GConfig->GetBool(Section, TEXT("Metronome"), bMetronome, GGameUserSettingsIni);
 	GConfig->GetBool(Section, TEXT("VSync"), bVSync, GGameUserSettingsIni);
 }
 
@@ -35,6 +36,7 @@ void FPianoAppSettings::Save() const
 	GConfig->SetBool(Section, TEXT("PedalInverted"), bPedalInverted, GGameUserSettingsIni);
 	GConfig->SetBool(Section, TEXT("Expressive"), bExpressive, GGameUserSettingsIni);
 	GConfig->SetBool(Section, TEXT("ScorePedal"), bScorePedal, GGameUserSettingsIni);
+	GConfig->SetBool(Section, TEXT("Metronome"), bMetronome, GGameUserSettingsIni);
 	GConfig->SetBool(Section, TEXT("VSync"), bVSync, GGameUserSettingsIni);
 	GConfig->Flush(false, GGameUserSettingsIni);
 }
@@ -53,6 +55,7 @@ void FPianoAppSettings::Apply(UPianoPlayer* Player) const
 	Player->SetPedalInverted(bPedalInverted);
 	Player->SetExpressive(bExpressive);
 	Player->SetScorePedal(bScorePedal);
+	Player->SetMetronome(bMetronome);
 }
 
 void FPianoAppSettings::ApplyInstrument(UPianoPlayer* Player) const

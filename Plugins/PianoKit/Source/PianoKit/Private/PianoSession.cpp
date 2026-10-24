@@ -65,6 +65,23 @@ FPianoSession::FPedalListPtr FPianoSession::GetPedals(uint32& OutVersion) const
 	return Pedals;
 }
 
+void FPianoSession::SetBeats(FPedalList&& InBeats)
+{
+	FPedalListPtr NewBeats = MakeShared<const FPedalList, ESPMode::ThreadSafe>(MoveTemp(InBeats));
+	{
+		FScopeLock Guard(&NotesLock);
+		Beats = NewBeats;
+	}
+	BeatsVersion.fetch_add(1, std::memory_order_acq_rel);
+}
+
+FPianoSession::FPedalListPtr FPianoSession::GetBeats(uint32& OutVersion) const
+{
+	FScopeLock Guard(&NotesLock);
+	OutVersion = BeatsVersion.load(std::memory_order_acquire);
+	return Beats;
+}
+
 void FPianoSession::SetSynth(FSynthPtr InSynth)
 {
 	{

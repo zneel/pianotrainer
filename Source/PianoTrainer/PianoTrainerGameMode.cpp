@@ -64,6 +64,7 @@ void APianoTrainerGameMode::BeginPlay()
 		int32 Flag = 0; // tests: -expressive=0|1 -scorepedal=0|1, whatever is saved
 		if (FParse::Value(FCommandLine::Get(), TEXT("-expressive="), Flag)) { Player->SetExpressive(Flag != 0); }
 		if (FParse::Value(FCommandLine::Get(), TEXT("-scorepedal="), Flag)) { Player->SetScorePedal(Flag != 0); }
+		if (FParse::Value(FCommandLine::Get(), TEXT("-metronome="), Flag)) { Player->SetMetronome(Flag != 0); }
 		// -instrumentcc=20:0,21:0: instrument controls (0..1) for testing, e.g. a sample library's resonance and noise layers
 		FString Controls;
 		if (FParse::Value(FCommandLine::Get(), TEXT("-instrumentcc="), Controls, /*bShouldStopOnSeparator*/ false))

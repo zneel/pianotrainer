@@ -105,6 +105,10 @@ public:
 	void SetPedals(FPedalList&& InPedals);
 	FPedalListPtr GetPedals(uint32& OutVersion) const;
 	uint32 GetPedalsVersion() const { return PedalsVersion.load(std::memory_order_acquire); }
+	// The score's beats for the metronome: X = song ms, Y = 1 on the first beat of a bar.
+	void SetBeats(FPedalList&& InBeats);
+	FPedalListPtr GetBeats(uint32& OutVersion) const;
+	uint32 GetBeatsVersion() const { return BeatsVersion.load(std::memory_order_acquire); }
 
 	// Game thread: the instrument the PianoKit Sfizz node plays. Audio thread: current one (version changes on update).
 	using FSynthPtr = TSharedPtr<FPianoSynth, ESPMode::ThreadSafe>;
@@ -126,6 +130,7 @@ public:
 	std::atomic<int32> CountInLeft{0};    // published: clicks still to come (0 = playing)
 	std::atomic<bool> bCountInRequest{false}; // count in again while playing (the clock waits for the clicks)
 	std::atomic<float> InputLatencyMs{0.f}; // play-along judges presses this much earlier (keyboard + audio latency)
+	std::atomic<bool> bMetronome{false};   // a light click on every beat while the music plays
 	std::atomic<bool> bScorePedal{false};  // play the score's pedal marks with what the app plays
 
 	// Game thread -> audio thread.
@@ -153,6 +158,8 @@ private:
 
 	FPedalListPtr Pedals = MakeShared<const FPedalList, ESPMode::ThreadSafe>();
 	std::atomic<uint32> PedalsVersion{1};
+	FPedalListPtr Beats = MakeShared<const FPedalList, ESPMode::ThreadSafe>();
+	std::atomic<uint32> BeatsVersion{1};
 
 	FSynthPtr Synth;
 	std::atomic<uint32> SynthVersion{0};
