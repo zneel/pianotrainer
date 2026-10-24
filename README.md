@@ -214,7 +214,7 @@ over 33 ms in any run):
 | `coach_tired` | done | right, then mistakes came back twice → stopped on the next clean pass (4 of 6 right) |
 | `coach_toobig` | split | hands together, wrong every 3rd note: 7 times and never right → too big → cut in half (5 → 6 sections) |
 | `coach_relearn` | done | mastered, last played 40 days ago, relearned for the third time → omniscient |
-| `coach_hardest` | done | Op. 10 No. 3: the plan starts at m. 17 (its densest bar), 7 right |
+| `coach_hardest` | done | Op. 10 No. 3 cut at phrases: no section is clearly the hardest, so it starts at m. 1–2, 7 right (the phrase test score starts at its dense m. 9–12) |
 | `coach_hands_auto` | done | two mistakes together → right hand alone R3, left L3, R2, L2, R1, L1 → together, 7 right |
 | `coach_hands_sep` | done | separate first: R3 L3 R2 L2 R1 L1 → together, 7 right, 0 wrong |
 | `coach_hands_toobig` | too big | every note wrong at 40 %: each hand's turn ends at half a minute (R, L), then the right hand's 7th wrong time → too big |
