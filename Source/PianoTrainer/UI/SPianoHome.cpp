@@ -8,6 +8,7 @@
 #include "PianoDrills.h"
 #include "PianoLibrary.h"
 
+#include "Algo/StableSort.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
@@ -169,7 +170,7 @@ TSharedRef<SWidget> SPianoHome::MakeRail()
 						.Text_Lambda([this]()
 						{
 							const FText Piano = SoundCredit ? SoundCredit() : FText::GetEmpty();
-							return FText::Format(LOCTEXT("Credits", "{0}Études: Chopin first editions, © The Fryderyk Chopin Institute (CC BY 4.0).\nEngraving: Verovio."),
+							return FText::Format(LOCTEXT("Credits", "{0}Chopin: first editions, © The Fryderyk Chopin Institute (CC BY 4.0). Bach, Liszt, Mendelssohn, Rachmaninoff: MuseScore uploads (public domain, CC0) from PDMX (CC BY 4.0).\nEngraving: Verovio."),
 								Piano.IsEmpty() ? FText::GetEmpty() : FText::Format(LOCTEXT("PianoCredit", "{0}.\n"), Piano));
 						})
 					]
@@ -585,8 +586,20 @@ void SPianoHome::RebuildLibraryRows()
 		return;
 	}
 	const TArray<FPianoLibraryEntry>& Entries = Library();
-	FString LastGroup;
+	// by composer, in alphabetical order (each in the order its source lists it), the player's own scores last
+	TArray<int32> Order;
 	for (int32 Index = 0; Index < Entries.Num(); ++Index)
+	{
+		Order.Add(Index);
+	}
+	Algo::StableSort(Order, [&Entries](int32 A, int32 B)
+	{
+		const FString& CA = Entries[A].Composer;
+		const FString& CB = Entries[B].Composer;
+		return CA.IsEmpty() != CB.IsEmpty() ? CB.IsEmpty() : CA < CB;
+	});
+	FString LastGroup;
+	for (const int32 Index : Order)
 	{
 		const FPianoLibraryEntry& E = Entries[Index];
 		const bool bYours = E.Composer.IsEmpty();

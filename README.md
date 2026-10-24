@@ -14,7 +14,10 @@ On top of the practice screen it has:
 - **expressive playback** when it plays for you: the score's dynamics, hairpins, accents and pedal marks, the melody
   voiced over the accompaniment;
 - **any piano you like**: an SFZ sample library (Piano in 162 recommended) played by sfizz, or **any VST 3
-  instrument** with its own window (Pianoteq, Garritan's ARIA Player, sfizz's plug-in...).
+  instrument** with its own window (Pianoteq, Garritan's ARIA Player, sfizz's plug-in...);
+- **a library of the composers' works**, fetched by scripts under open licences: Chopin's solo piano works from
+  his first editions (155 pieces, the Chopin Institute, CC BY 4.0) and, from MuseScore uploads in the public domain
+  or CC0 (PDMX), the best of Bach's keyboard works (48), Liszt (31), Rachmaninoff (15) and Mendelssohn (7).
 
 | | |
 |---|---|
@@ -24,6 +27,8 @@ On top of the practice screen it has:
 | Home | The 24 Études and what each trains |
 | ![Diary](docs/screenshots/diary.png) | ![Settings](docs/screenshots/settings.png) |
 | The practice diary | Settings: sound, plug-ins, MIDI keyboard, display |
+| ![Library](docs/screenshots/library.png) | |
+| The Library: composers, collections, search; each piece's edition and licence on hover | |
 
 (`tools/take_screenshots.ps1` takes them again.)
 
@@ -45,7 +50,9 @@ On top of the practice screen it has:
 **Menu.** *Home*: continue, the Chopin Études, open a score, and the pieces practised recently. *Études*: each
 étude's key, nickname, what it trains and the tools that suit it. *Diary*: practice days in the last week, what is due
 today (sections to check or play through, pieces to relearn), each plan's progress and the latest sessions; click an
-item to practise it. *Library*: the bundled samples and recent files. *Settings* (also the top bar's Settings
+item to practise it. *Library*: every piece by composer and collection (Bach · Well-Tempered Clavier, Chopin ·
+Nocturnes...), a chip per composer and one for your own scores (samples, recent files), a search box (title, opus,
+collection), and each piece's edition and licence on hover. *Settings* (also the top bar's Settings
 button): the piano (an SFZ or a VST 3 plug-in, *Open its window* for the plug-in's own controls, volume, sample
 quality), playback (play expressively, pedal from the score), the MIDI keyboards seen (a light shows while one sends),
 touch (velocity curve), a reversed sustain pedal, and the window (window / borderless / full screen, resolution,
@@ -160,7 +167,22 @@ Nothing large is in git; scripts fetch it, pinned by hash or size:
 ```
 py -I tools/fetch_thirdparty.py     # Verovio 6.3.0, lunasvg 3.5.0, sfizz 1.2.3 sources (~26 MB) -> ThirdParty/src
 py -I tools/fetch_etudes.py         # Chopin Études, 24 Humdrum files, ~0.6 MB -> Scores/Etudes/Chopin
+py -I tools/fetch_library_chopin.py # Chopin's solo works, 157 first-edition Humdrum files, ~4 MB -> Scores/Library/Chopin
+py -I tools/fetch_library_pdmx.py   # Bach, Liszt, Mendelssohn, Rachmaninoff from PDMX: downloads PDMX.csv (225 MB) and
+                                    # mxl.tar.gz (1.89 GB, MD5-checked) to E:/modding/downloads/pdmx (--downloads <dir>),
+                                    # keeps ~100 MusicXML files -> Scores/Library/<Composer>; --list shows the choice
 ```
+
+The library's scripts write a `catalog.json` per source (composer, collection, title, opus, credit; the app lists
+from it without opening the files) and then load every piece through Verovio (`tools/check_library.py --prune`):
+a piece that does not load is left out of the catalog and named in `skipped.json`. Chopin: one first edition per
+piece (the edition that has most of its opus), without the Études (they have their own page) and the works with
+orchestra, chamber music, two pianos and songs; the two posthumous polonaises (G minor, G-sharp minor) stop Verovio
+6.3's Humdrum import on an assertion and are left out. PDMX: no curated open edition of Bach, Liszt, Mendelssohn or
+Rachmaninoff exists in a format Verovio reads (the encoded corpora are non-commercial or reserve their rights), so
+the script takes MuseScore uploads without licence conflicts, solo piano, no lyrics, the composer's own piano works
+(Bach: BWV 772-994, the notebooks, 999, 1080), no arrangements, jokes or annotated copies, rated 4.5+ or viewed
+300+ times, one per work (catalogue number, number and movement, or a nickname). Their quality varies.
 
 The piano samples are not fetched: Piano in 162 may be used but not passed on, so download its SFZ version from
 ivyaudio.com and unzip it into `<user data>/PianoTrainer/Instruments` (on Windows
@@ -237,6 +259,8 @@ piece.
   as `Saved/TestPlugins/mdaPiano.vst3`, the real VST 3 instrument the `vst3_*` tests load. The script fixes one bug in
   the sample: a note exactly at the end of one of its 16-frame slices was dropped (round score times at 48 kHz land
   there: 9 of the Ode's 19 onsets).
+- `tools/check_library.py [source]` loads every library piece through Verovio, each in its own process (an assertion
+  in Verovio ends the process, and would end the app), and reports failures; `--prune` also drops them from the catalog.
 - `tools/wav_clicks.py`, `wav_levels.py`, `wav_onsets.py` measure recordings; `tools/expression_report.py` compares
   velocities and loudness with and without expression; `tools/vrv_probe.py` runs a score through Verovio outside UE;
   `tools/take_screenshots.ps1` takes the screenshots above.
@@ -305,7 +329,7 @@ Source/PianoTrainer/
                              SPianoPlanPanel, FPianoCoach, SPianoTransport, SPianoRuler, SPianoHud, PianoWidgets,
                              PianoStyle
   Piano3D/                   optional engine-rendered keyboard + note highway (-keyboard3d)
-Scores/                      sample scores, Etudes/Chopin (fetched)
+Scores/                      sample scores, Etudes/Chopin and Library/<source> with its catalog.json (fetched)
 ThirdParty/                  build scripts and patches; src/ and build/ are local
 tools/                       fetch scripts, test battery, test VST 3 build (test_vst3/), screenshots, score
                              generators, wav analysis, vrv_probe
@@ -316,7 +340,11 @@ tools/                       fetch scripts, test battery, test VST 3 build (test
 - Not yet tested: a real MIDI keyboard and its pedal, the macOS build (and its VST 3 window), Piano in 162 itself
   (its controls, e.g. the room blend, are not in Settings yet), and VST 3 plug-ins other than the test one.
 - VST 2, AU and CLAP plug-ins are not hosted (VST 2 cannot be with open-source code).
-- The three Nouvelles Études are not included: no openly licensed machine-readable edition was found.
+- The three Nouvelles Études are not included: no openly licensed machine-readable edition was found. Nor are most
+  of Chopin's posthumous works without opus number, or Op. 71 Nos. 2-3 (not in the Chopin Institute's set).
+- Bach, Liszt, Mendelssohn and Rachmaninoff are MuseScore uploads (PDMX): whatever users made, chosen by rating and
+  views; coverage is partial (no complete WTC, Goldberg, Transcendental Études...). Mutopia has hand-made public-domain
+  editions (Bach ~100 pieces, Mendelssohn 7, Liszt 4, Rachmaninoff 10), but only in LilyPond, which Verovio cannot read.
 - `.mscz` needs MuseScore Studio installed; plain `.mid` files are refused (no notation to engrave).
 - From `docs/bernhard-method.md` §4, not built yet: a dropping-notes join mode, a personal "seven" (Bernhard: 5-9 for
   most people), a jump-up-and-back tempo ladder, a hidden-sheet memory pass, free-text diary notes with a "tomorrow"
@@ -332,5 +360,8 @@ Verovio is LGPL-3.0 and sfizz is BSD-2 (with abseil, Apache-2.0); both are shipp
 with their licences next to them. lunasvg and plutovg are MIT. Harmonix and MIDI Device Support are Epic plugins.
 The VST 3 SDK parts in `PianoVst3/sdk` are MIT (Steinberg; VST is a trademark of Steinberg Media Technologies
 GmbH). No piano samples are shipped: Piano in 162 (Ivy Audio) is free to use but not to redistribute, so each player
-downloads it; the app credits whichever instrument plays. The Chopin first editions are © The Fryderyk Chopin Institute, CC BY 4.0
+downloads it; the app credits whichever instrument plays. The library: Chopin's first editions © The Fryderyk
+Chopin Institute (CC BY 4.0; `Scores/Library/Chopin/LICENSE.txt`); the PDMX scores are MuseScore uploads marked public
+domain or CC0, from PDMX by Long, Novack, Berg-Kirkpatrick and McAuley (CC BY 4.0), each credited in its catalog and
+in the app. The Chopin first editions are © The Fryderyk Chopin Institute, CC BY 4.0
 (`Scores/Etudes/Chopin/LICENSE.txt`). Cortot's editions are not used. The app's own code has no licence file yet.

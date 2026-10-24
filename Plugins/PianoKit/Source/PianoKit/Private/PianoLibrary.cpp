@@ -135,35 +135,40 @@ TArray<FPianoLibraryEntry> FPianoLibrary::Scan(const TArray<FString>& RecentPath
 		Entry.bBuiltIn = true;
 	}
 
-	// the composers' library, from its catalog: { "pieces": [ { "file", "composer", "collection", "title", "subtitle",
-	// "credit" } ] } (file relative to Scores)
-	FString Catalog;
-	TSharedPtr<FJsonObject> Root;
-	if (FFileHelper::LoadFileToString(Catalog, *(Dir / TEXT("Library/catalog.json")))
-		&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Catalog), Root) && Root.IsValid())
+	// the composers' library, a catalog per source (Library/<source>/catalog.json, from its fetch script):
+	// { "pieces": [ { "file", "composer", "collection", "title", "subtitle", "credit" } ] } (file relative to Scores)
+	TArray<FString> Sources;
+	IFileManager::Get().FindFiles(Sources, *(Dir / TEXT("Library/*")), /*Files*/ false, /*Directories*/ true);
+	Sources.Sort();
+	for (const FString& Source : Sources)
 	{
+		FString Catalog;
+		TSharedPtr<FJsonObject> Root;
 		const TArray<TSharedPtr<FJsonValue>>* Pieces = nullptr;
-		if (Root->TryGetArrayField(TEXT("pieces"), Pieces))
+		if (!FFileHelper::LoadFileToString(Catalog, *(Dir / TEXT("Library") / Source / TEXT("catalog.json")))
+			|| !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Catalog), Root) || !Root.IsValid()
+			|| !Root->TryGetArrayField(TEXT("pieces"), Pieces))
 		{
-			for (const TSharedPtr<FJsonValue>& Value : *Pieces)
+			continue;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Pieces)
+		{
+			const TSharedPtr<FJsonObject> Piece = Value->AsObject();
+			const FString File = Piece.IsValid() ? Piece->GetStringField(TEXT("file")) : FString();
+			if (File.IsEmpty() || !FPaths::FileExists(Dir / File))
 			{
-				const TSharedPtr<FJsonObject> Piece = Value->AsObject();
-				const FString File = Piece.IsValid() ? Piece->GetStringField(TEXT("file")) : FString();
-				if (File.IsEmpty() || !FPaths::FileExists(Dir / File))
-				{
-					continue;
-				}
-				FPianoLibraryEntry& Entry = Out.AddDefaulted_GetRef();
-				Entry.Path = Dir / File;
-				Entry.File = File;
-				Entry.Title = Piece->GetStringField(TEXT("title"));
-				Piece->TryGetStringField(TEXT("subtitle"), Entry.Subtitle);
-				Entry.Collection = Piece->GetStringField(TEXT("collection"));
-				Entry.Composer = Piece->GetStringField(TEXT("composer"));
-				Piece->TryGetStringField(TEXT("credit"), Entry.Credit);
-				Entry.Drills = { EPianoDrill::LongShort, EPianoDrill::BlockChords, EPianoDrill::AccentFour };
-				Entry.bBuiltIn = true;
+				continue;
 			}
+			FPianoLibraryEntry& Entry = Out.AddDefaulted_GetRef();
+			Entry.Path = Dir / File;
+			Entry.File = File;
+			Entry.Title = Piece->GetStringField(TEXT("title"));
+			Piece->TryGetStringField(TEXT("subtitle"), Entry.Subtitle);
+			Entry.Collection = Piece->GetStringField(TEXT("collection"));
+			Entry.Composer = Piece->GetStringField(TEXT("composer"));
+			Piece->TryGetStringField(TEXT("credit"), Entry.Credit);
+			Entry.Drills = { EPianoDrill::LongShort, EPianoDrill::BlockChords, EPianoDrill::AccentFour };
+			Entry.bBuiltIn = true;
 		}
 	}
 

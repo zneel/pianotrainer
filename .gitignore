@@ -23,3 +23,6 @@ Plugins/PianoKit/ThirdParty/Sfizz/
 # Piano samples: each player's own copy (Piano in 162 may not be redistributed); the old Salamander download
 Instruments/
 Plugins/PianoKit/ThirdParty/Salamander/
+
+# The composers' library: fetched by tools/fetch_library_*.py
+Scores/Library/
