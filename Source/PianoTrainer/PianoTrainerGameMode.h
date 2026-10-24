@@ -41,6 +41,10 @@ private:
 	void StartCoachTest();
 	void TickCoachTest();
 	void TickPlanTest();
+	// -pluginwindow: opens the plug-in's window a second in, closes it two seconds later, logs whether its state was kept
+	void TickPluginWindowTest();
+	bool bPluginWindowTest = false;
+	int32 PluginWindowStep = 0;
 
 	UPROPERTY()
 	TObjectPtr<UPianoPlayer> Player;

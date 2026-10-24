@@ -25,6 +25,9 @@ $HandsArg = "-diary=`"$HandsDiary`""
 # the plan tests make their plans in a fresh diary each time
 $PlanDiary = Join-Path $Out "diary_plan.json"
 $PlanArg = "-diary=`"$PlanDiary`""
+# a real VST 3 instrument for the plug-in host tests (tools/build_test_vst3.ps1; skipped when it is not built)
+$TestVst = Join-Path $Root "Saved\TestPlugins\mdaPiano.vst3"
+$VstArg = "-instrument=`"$TestVst`""
 
 $Tests = [ordered]@{
     "ode_wait"      = @("-autotest", $Ode)
@@ -55,6 +58,9 @@ $Tests = [ordered]@{
     "coach_hands_sep"    = @("-autotest", $Ode, $HandsArg, "-coach=s2", "-coachhands=separate")
     # every note wrong, at 40 %: each turn ends on the half-minute limit, then a hand alone seven times and never right -> too big
     "coach_hands_toobig" = @("-autotest", $Ode, $HandsArg, "-coach=s4", "-coachhands=separate", "-autoerrors=1", "-tempo=0.4")
+    # the Ode played by a VST 3 plug-in (recorded), and the plug-in's own window opened and closed, its state kept
+    "vst3_ode"      = @("-autotest", $Ode, "-listen", "-wait=0", "-recordwav", "-stop=12000", $VstArg)
+    "vst3_window"   = @("-autotest", $Ode, "-listen", "-wait=0", "-stop=9000", "-pluginwindow", $VstArg)
 }
 
 # what the plan tests must produce (en dashes in labels read as "-")
@@ -101,12 +107,13 @@ function Format-Plan($Sections) {
 foreach ($Name in $Tests.Keys) {
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { continue }
     if ($Name -eq "stress_200" -and -not $Stress) { continue }
+    if ($Name -like "vst3_*" -and -not (Test-Path $TestVst)) { Write-Output ("{0,-14} SKIPPED (no test plug-in: tools/build_test_vst3.ps1)" -f $Name); continue }
     if ($Prep.ContainsKey($Name)) { & $Prep[$Name] }
     if ($Name -like "plan_*") { Remove-Item $PlanDiary -ErrorAction SilentlyContinue }
     Remove-Item (Join-Path $Logs "autotest.json"), (Join-Path $Logs "autotest.wav"), (Join-Path $Logs "plantest.json") -ErrorAction SilentlyContinue
     $Args = @()
     if ($IsEditor) { $Args += "`"$Root\PianoTrainer.uproject`""; $Args += "-game" }
-    $Args += @("-windowed", "-resx=1600", "-resy=900", "-unattended", "-nosplash", "-log=test_$Name.log") + $Tests[$Name]
+    $Args += @("-windowed", "-resx=1600", "-resy=900", "-unattended", "-nosplash", "-quiet", "-log=test_$Name.log") + $Tests[$Name]
     $Start = Get-Date
     $P = Start-Process -FilePath $Exe -ArgumentList $Args -PassThru
     $P.WaitForExit(900000) | Out-Null
@@ -141,6 +148,15 @@ foreach ($Name in $Tests.Keys) {
             $Line += "  {0}: {1}, {2}/{3} clean (target {4}), groups {5}, stage {6}, sections {7}" -f $J.coach_label, $J.coach_phases, $J.coach_clean, $J.coach_passes, $J.coach_target, $J.coach_group_passes, $J.section_stage, $J.plan_sections
             if ($J.sections_after_split -ge 0) { $Line += " (split {0}->{1})" -f $J.sections_before_split, $J.sections_after_split }
             if ($J.coach_hand_turns) { $Line += ", hands {0}" -f $J.coach_hand_turns }
+        }
+        if ($Name -like "vst3_*") {
+            $TestLog = Get-Content (Join-Path $Root "Saved\Logs\test_$Name.log") -Raw
+            $Loaded = $TestLog -match "Instrument mda Piano \(VST 3\)"
+            $Line += "  plug-in loaded: {0}" -f $(if ($Loaded) { "PASS" } else { "FAIL" })
+            if ($Name -eq "vst3_window") {
+                $Window = $TestLog -match "pluginwindow: opened 1, open 1" -and $TestLog -match "pluginwindow: open after closing 0, state [^\r\n]*, [1-9][0-9]* bytes"
+                $Line += ", window opened, closed and state kept: {0}" -f $(if ($Window) { "PASS" } else { "FAIL" })
+            }
         }
         Write-Output $Line
     } else {

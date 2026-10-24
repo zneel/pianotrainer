@@ -1,5 +1,6 @@
 #include "PianoScore.h"
 
+#include "PianoExpression.h"
 #include "PianoKitLog.h"
 
 #include "Algo/BinarySearch.h"
@@ -7,6 +8,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformProcess.h"
 #include "Interfaces/IPluginManager.h"
+#include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
@@ -32,8 +34,10 @@ namespace PianoScoreImpl
 		"pageMarginBottom": 15,
 		"pageMarginLeft": 60,
 		"pageMarginRight": 60,
-		"spacingStaff": 10
-	})";
+		"spacingStaff": 10,
+		"spacingNonLinear": 0.9,
+		"spacingLinear": 0.07
+	})"; // spacing nearly proportional to duration (Verovio: 0.6 / 0.25), so the line scrolls at an even speed
 
 	static TSharedPtr<FJsonValue> ParseJson(const char* Utf8)
 	{
@@ -216,6 +220,22 @@ namespace PianoScoreImpl
 		if (GlyphDirs > 0)
 		{
 			Changes.Add(FString::Printf(TEXT("%d glyph-only texts"), GlyphDirs));
+		}
+
+		// Humdrum import warnings (type="problem": a crimson warning sign the music font cannot draw, so it shows as
+		// an empty box). They flag the encoding, not the music.
+		const int32 Problems = RewriteElements(Mei, TEXT("dir"), [](const FString&, const FString& OpenTag, FString& Out)
+		{
+			if (!OpenTag.Contains(TEXT("type=\"problem\"")))
+			{
+				return false;
+			}
+			Out.Reset();
+			return true;
+		});
+		if (Problems > 0)
+		{
+			Changes.Add(FString::Printf(TEXT("%d import warnings"), Problems));
 		}
 
 		// Metronome marks without words (♩ = 52): when they are dense they are rubato, not reading aids.
@@ -444,6 +464,10 @@ bool FPianoScore::LoadFile(const FString& InPath, FString& OutError)
 	}
 	ON_SCOPE_EXIT { Vrv.destructor(Tk); };
 	Vrv.setOptions(Tk, VerovioOptions);
+	if (FParse::Param(FCommandLine::Get(), TEXT("vrvdefaultspacing")))
+	{
+		Vrv.setOptions(Tk, R"({"spacingNonLinear": 0.6, "spacingLinear": 0.25})"); // tests: Verovio's own spacing
+	}
 
 	bool bLoaded = false;
 	FString TextForTitle;
@@ -819,10 +843,209 @@ bool FPianoScore::LoadFile(const FString& InPath, FString& OutError)
 				break;
 			}
 		}
-		UE_LOG(LogPianoKit, Log, TEXT("  phrasing: %d slurs, %d fermatas, key %+d"), Marks.Slurs.Num(), Marks.Fermatas.Num(), Marks.KeyFifths);
+		// Expression, for how the app plays the score (FPianoExpression): dynamics, hairpins, pedal marks, articulation.
+		// A repeat's notes share their ids with the first time through: a mark applies every time it is played.
+		TMap<FString, TArray<int32>> AllById, MeasuresById;
+		for (int32 Index = 0; Index < Notes.Num(); ++Index)
+		{
+			AllById.FindOrAdd(Notes[Index].Id).Add(Index);
+		}
+		for (int32 Index = 0; Index < Measures.Num(); ++Index)
+		{
+			MeasuresById.FindOrAdd(Measures[Index].Id).Add(Index);
+		}
+		TArray<int32> MeasureTagPos;
+		TArray<FString> MeasureTagId;
+		ForEachTag(TEXT("<measure "), [&](int32 Pos, const FString& Tag) { MeasureTagPos.Add(Pos); MeasureTagId.Add(AttrValue(Tag, TEXT("xml:id"))); });
+		int32 MeterUnit = 4; // what a tstamp counts (the time signature's lower number)
+		for (const TCHAR* Key : { TEXT(" unit=\""), TEXT(" meter.unit=\"") })
+		{
+			const int32 At = Mei.Find(Key, ESearchCase::CaseSensitive);
+			if (At != INDEX_NONE)
+			{
+				MeterUnit = FMath::Max(1, FCString::Atoi(*Mei.Mid(At + FCString::Strlen(Key), 3)));
+				break;
+			}
+		}
+		auto MsPerQuarter = [&](int32 M)
+		{
+			for (int32 K = M; K >= 0 && K >= M - 1; --K)
+			{
+				if (Measures.IsValidIndex(K + 1) && Measures[K + 1].QStamp > Measures[K].QStamp)
+				{
+					return (Measures[K + 1].OnMs - Measures[K].OnMs) / (Measures[K + 1].QStamp - Measures[K].QStamp);
+				}
+			}
+			return 500.0;
+		};
+		// when a control event happens: at its note (every time it is played), else at its tstamp ("2.5", or "1m+2.5":
+		// a measure later) in the measure it is written in
+		auto EventTimes = [&](int32 Pos, const FString& Tag, const TCHAR* IdAttr, const TCHAR* StampAttr)
+		{
+			TArray<double> Times;
+			const FString Id = AttrValue(Tag, IdAttr);
+			if (!Id.IsEmpty())
+			{
+				const TArray<int32>* Indices = AllById.Find(Id);
+				if (!Indices)
+				{
+					const int32* First = FirstNoteOfChord.Find(Id);
+					Indices = First ? AllById.Find(Notes[*First].Id) : nullptr;
+				}
+				for (const int32 Index : Indices ? *Indices : TArray<int32>())
+				{
+					Times.Add(Notes[Index].OnMs);
+				}
+				if (Times.Num() == 0 && RestTimes.Contains(Id))
+				{
+					Times.Add(RestTimes[Id]);
+				}
+				if (Times.Num() > 0)
+				{
+					return Times;
+				}
+			}
+			const FString Stamp = AttrValue(Tag, StampAttr);
+			const int32 TagIndex = Algo::UpperBound(MeasureTagPos, Pos) - 1;
+			const TArray<int32>* InMeasures = MeasureTagId.IsValidIndex(TagIndex) ? MeasuresById.Find(MeasureTagId[TagIndex]) : nullptr;
+			if (Stamp.IsEmpty() || !InMeasures)
+			{
+				return Times;
+			}
+			FString Later, Beat = Stamp;
+			const int32 Later_ = Stamp.Split(TEXT("m+"), &Later, &Beat) ? FCString::Atoi(*Later) : 0;
+			for (const int32 M : *InMeasures)
+			{
+				const int32 At = FMath::Clamp(M + Later_, 0, FMath::Max(0, Measures.Num() - 1));
+				Times.Add(GetMeasureStartMs(At) + (FCString::Atod(*Beat) - 1.0) * MsPerQuarter(At) * 4.0 / MeterUnit);
+			}
+			return Times;
+		};
+		// dynamics (and written cresc. / dim., to the next dynamic within two bars)
+		auto AddTextHairpin = [&](const FString& Text, double Ms)
+		{
+			const bool bCres = Text.Contains(TEXT("cresc")) && !Text.Contains(TEXT("decresc"));
+			if (bCres || Text.Contains(TEXT("dim")) || Text.Contains(TEXT("decresc")) || Text.Contains(TEXT("smorz")) || Text.Contains(TEXT("calando")))
+			{
+				Marks.Hairpins.Add({ Ms, Ms + 8.0 * MsPerQuarter(GetMeasureAt(Ms)), bCres });
+			}
+		};
+		static const TMap<FString, int32> Levels = { { TEXT("pppp"), 22 }, { TEXT("ppp"), 28 }, { TEXT("pp"), 38 }, { TEXT("p"), 50 }, { TEXT("mp"), 62 },
+			{ TEXT("mf"), 74 }, { TEXT("f"), 88 }, { TEXT("ff"), 102 }, { TEXT("fff"), 114 }, { TEXT("ffff"), 120 }, { TEXT("fp"), 50 }, { TEXT("sfp"), 50 } };
+		static const TSet<FString> Sforzandi = { TEXT("sf"), TEXT("sfz"), TEXT("sff"), TEXT("sffz"), TEXT("fz"), TEXT("ffz"), TEXT("rf"), TEXT("rfz"), TEXT("fp"), TEXT("sfp") };
+		for (const TCHAR* Name : { TEXT("dynam"), TEXT("dir") })
+		{
+			for (int32 Cursor = 0, Start = 0, OpenEnd = 0, End = 0; FindElement(Mei, Name, Cursor, Start, OpenEnd, End); Cursor = End)
+			{
+				const FString Tag = Mei.Mid(Start, OpenEnd - Start);
+				const FString Text = InnerText(Mei.Mid(Start, End - Start)).ToLower();
+				TArray<FString> Words;
+				Text.ParseIntoArrayWS(Words, TEXT(".,;:()"));
+				for (const double Ms : EventTimes(Start, Tag, TEXT("startid"), TEXT("tstamp")))
+				{
+					for (const FString& Word : Words)
+					{
+						const int32* Level = FCString::Strcmp(Name, TEXT("dynam")) == 0 ? Levels.Find(Word) : nullptr;
+						const bool bAccent = FCString::Strcmp(Name, TEXT("dynam")) == 0 && Sforzandi.Contains(Word);
+						if (Level || bAccent)
+						{
+							Marks.Dynamics.Add({ Ms, Level ? *Level : 0, bAccent });
+						}
+						AddTextHairpin(Word, Ms);
+					}
+				}
+			}
+		}
+		Marks.Dynamics.StableSort([](const FPianoScoreDynamic& A, const FPianoScoreDynamic& B) { return A.Ms < B.Ms; });
+		ForEachTag(TEXT("<hairpin "), [&](int32 Pos, const FString& Tag)
+		{
+			const TArray<double> Starts = EventTimes(Pos, Tag, TEXT("startid"), TEXT("tstamp"));
+			const TArray<double> Ends = EventTimes(Pos, Tag, TEXT("endid"), TEXT("tstamp2"));
+			for (int32 I = 0; I < Starts.Num(); ++I)
+			{
+				const double EndMs = Ends.IsValidIndex(I) && Ends[I] > Starts[I] ? Ends[I] : Starts[I] + 4.0 * MsPerQuarter(GetMeasureAt(Starts[I]));
+				Marks.Hairpins.Add({ Starts[I], EndMs, AttrValue(Tag, TEXT("form")) != TEXT("dim") });
+			}
+		});
+		Marks.Hairpins.StableSort([](const FPianoScoreHairpin& A, const FPianoScoreHairpin& B) { return A.StartMs < B.StartMs; });
+		// sustain pedal marks (a "bounce" lifts and presses again)
+		ForEachTag(TEXT("<pedal "), [&](int32 Pos, const FString& Tag)
+		{
+			const FString Dir = AttrValue(Tag, TEXT("dir"));
+			for (const double Ms : EventTimes(Pos, Tag, TEXT("startid"), TEXT("tstamp")))
+			{
+				if (Dir == TEXT("up") || Dir == TEXT("bounce"))
+				{
+					Marks.Pedals.Add(FVector2D(Dir == TEXT("bounce") ? Ms - 1.0 : Ms, 0.0));
+				}
+				if (Dir == TEXT("down") || Dir == TEXT("half") || Dir == TEXT("bounce"))
+				{
+					Marks.Pedals.Add(FVector2D(Ms, 1.0));
+				}
+			}
+		});
+		Marks.Pedals.StableSort([](const FVector2D& A, const FVector2D& B) { return A.X < B.X; });
+		// articulation, on a note or on a chord (then on all its notes): artic="acc stacc" or <artic artic="..."/>
+		auto ArticFlags = [](const FString& Xml)
+		{
+			uint8 Flags = 0;
+			for (int32 At = Xml.Find(TEXT("artic=\"")); At != INDEX_NONE; At = Xml.Find(TEXT("artic=\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, At + 7))
+			{
+				TArray<FString> Values;
+				Xml.Mid(At + 7, Xml.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, At + 7) - At - 7).ParseIntoArrayWS(Values);
+				for (const FString& V : Values)
+				{
+					Flags |= V == TEXT("acc") ? ArticAccent : V == TEXT("marc") ? ArticMarcato : V == TEXT("stacc") ? ArticStaccato
+						: V == TEXT("stacciss") || V == TEXT("spicc") ? ArticStaccatissimo : V == TEXT("ten") ? ArticTenuto : 0;
+				}
+			}
+			return Flags;
+		};
+		auto Articulate = [&](const FString& Id, uint8 Flags)
+		{
+			for (const int32 Index : AllById.Contains(Id) ? AllById[Id] : TArray<int32>())
+			{
+				Notes[Index].Artic |= Flags;
+			}
+		};
+		for (int32 Cursor = 0, Start = 0, OpenEnd = 0, End = 0; FindElement(Mei, TEXT("note"), Cursor, Start, OpenEnd, End); Cursor = End)
+		{
+			const FString Element = Mei.Mid(Start, End - Start);
+			if (const uint8 Flags = ArticFlags(Element))
+			{
+				Articulate(AttrValue(Mei.Mid(Start, OpenEnd - Start), TEXT("xml:id")), Flags);
+			}
+		}
+		for (int32 Cursor = 0, Start = 0, OpenEnd = 0, End = 0; FindElement(Mei, TEXT("chord"), Cursor, Start, OpenEnd, End); Cursor = End)
+		{
+			// the chord's own marks: outside its notes
+			FString Own = Mei.Mid(Start, End - Start);
+			TArray<FString> NoteIds;
+			for (int32 NoteStart = 0, NoteOpenEnd = 0, NoteEnd = 0; FindElement(Own, TEXT("note"), 0, NoteStart, NoteOpenEnd, NoteEnd);)
+			{
+				NoteIds.Add(AttrValue(Own.Mid(NoteStart, NoteOpenEnd - NoteStart), TEXT("xml:id")));
+				Own.RemoveAt(NoteStart, NoteEnd - NoteStart);
+			}
+			if (const uint8 Flags = ArticFlags(Own))
+			{
+				for (const FString& Id : NoteIds)
+				{
+					Articulate(Id, Flags);
+				}
+			}
+		}
+		UE_LOG(LogPianoKit, Log, TEXT("  phrasing: %d slurs, %d fermatas, key %+d; expression: %d dynamics, %d hairpins, %d pedal marks"),
+			Marks.Slurs.Num(), Marks.Fermatas.Num(), Marks.KeyFifths, Marks.Dynamics.Num(), Marks.Hairpins.Num(), Marks.Pedals.Num());
 	}
 
 	BuildScrollMap();
+
+	// how the app plays it: dynamics, voicing, accents
+	const TArray<uint8> Velocities = FPianoExpression::Velocities(*this);
+	for (int32 Index = 0; Index < Notes.Num(); ++Index)
+	{
+		Notes[Index].Velocity = Velocities[Index];
+	}
 
 	UE_LOG(LogPianoKit, Log, TEXT("Loaded '%s': %d notes, %d measures, %d staves, %.1f s, strip %.0fx%.0f px, %.0f ms"),
 		*Title, Notes.Num(), Measures.Num(), NumStaves, LengthMs / 1000.0, Size.X, Size.Y,
@@ -840,42 +1063,103 @@ void FPianoScore::BuildScrollMap()
 {
 	MapMs.Reset();
 	MapX.Reset();
+	MapSlope.Reset();
+	MapRunStart.Reset();
 
-	// One point per onset at the leftmost notehead centre of the notes starting there.
+	// Onsets: the leftmost notehead centre of the notes starting there.
+	TArray<double> OnsetMs;
+	TArray<float> OnsetX;
 	for (int32 Index = 0; Index < Notes.Num();)
 	{
 		const double OnMs = Notes[Index].OnMs;
 		float X = TNumericLimits<float>::Max();
-		for (; Index < Notes.Num() && Notes[Index].OnMs == OnMs; ++Index)
+		for (; Index < Notes.Num() && Notes[Index].OnMs - OnMs <= 1.0; ++Index)
 		{
 			if (Notes[Index].Head.bIsValid)
 			{
 				X = FMath::Min(X, Notes[Index].Head.GetCenter().X);
 			}
 		}
-		if (X == TNumericLimits<float>::Max())
+		if (X != TNumericLimits<float>::Max())
 		{
-			continue;
+			OnsetMs.Add(OnMs);
+			OnsetX.Add(X);
 		}
-		if (MapX.Num() > 0 && X < MapX.Last())
-		{
-			X = MapX.Last(); // keep the map monotonic (e.g. displaced seconds in chords)
-		}
-		MapMs.Add(OnMs);
-		MapX.Add(X);
+	}
+	if (OnsetMs.Num() == 0)
+	{
+		return;
 	}
 
-	// End point: the final barline.
-	if (Measures.Num() > 0 && MapX.Num() > 0)
+	// Anchors: the first onset, then each bar's downbeat (a bar starting with a rest is spanned by its neighbours).
+	// Following every note would make the line speed up and slow down with the engraving's spacing.
+	auto AddAnchor = [this](double Ms, float X)
+	{
+		if (MapMs.Num() > 0 && Ms <= MapMs.Last() + 1.0)
+		{
+			return;
+		}
+		// a step back of more than a notehead: the second time through a repeat
+		MapRunStart.Add(MapX.Num() == 0 || X < MapX.Last() - 4.f);
+		MapMs.Add(Ms);
+		MapX.Add(MapRunStart.Last() || X >= MapX.Last() ? X : MapX.Last());
+	};
+	AddAnchor(OnsetMs[0], OnsetX[0]);
+	for (const FPianoScoreMeasure& Measure : Measures)
+	{
+		const int32 At = Algo::LowerBound(OnsetMs, Measure.OnMs - 2.0);
+		if (OnsetMs.IsValidIndex(At) && OnsetMs[At] <= Measure.OnMs + 2.0)
+		{
+			AddAnchor(OnsetMs[At], OnsetX[At]);
+		}
+	}
+	// End: the final barline (or the last onset).
+	float EndX = OnsetX.Last();
+	if (Measures.Num() > 0)
 	{
 		if (lunasvg::Element Last = Document->getElementById(TCHAR_TO_UTF8(*Measures.Last().Id)))
 		{
 			const lunasvg::Box Box = Last.getGlobalBoundingBox();
-			if (LengthMs > MapMs.Last() && Box.x + Box.w > MapX.Last())
-			{
-				MapMs.Add(LengthMs);
-				MapX.Add(Box.x + Box.w);
-			}
+			EndX = FMath::Max(EndX, float(Box.x + Box.w));
+		}
+	}
+	if (LengthMs > MapMs.Last() + 1.0 && EndX > MapX.Last())
+	{
+		AddAnchor(LengthMs, EndX);
+	}
+	if (MapMs.Num() == 1)
+	{
+		MapSlope.Add(0.1);
+		return;
+	}
+
+	// Slopes for a monotone cubic (Fritsch-Carlson) within each run: smooth speed, never backwards.
+	const int32 N = MapMs.Num();
+	TArray<double> Secant;
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		Secant.Add(MapRunStart[I + 1] ? -1.0 : (MapX[I + 1] - MapX[I]) / FMath::Max(1.0, MapMs[I + 1] - MapMs[I]));
+	}
+	MapSlope.Init(0.0, N);
+	for (int32 I = 0; I < N; ++I)
+	{
+		const bool bHasLeft = I > 0 && Secant[I - 1] >= 0.0;
+		const bool bHasRight = I + 1 < N && Secant[I] >= 0.0;
+		const double Left = bHasLeft ? Secant[I - 1] : 0.0, Right = bHasRight ? Secant[I] : 0.0;
+		MapSlope[I] = bHasLeft && bHasRight ? (Left * Right <= 0.0 ? 0.0 : 0.5 * (Left + Right)) : bHasLeft ? Left : Right;
+	}
+	for (int32 I = 0; I + 1 < N; ++I)
+	{
+		if (Secant[I] <= 0.0)
+		{
+			continue;
+		}
+		const double A = MapSlope[I] / Secant[I], B = MapSlope[I + 1] / Secant[I];
+		if (A * A + B * B > 9.0)
+		{
+			const double Tau = 3.0 / FMath::Sqrt(A * A + B * B);
+			MapSlope[I] = Tau * A * Secant[I];
+			MapSlope[I + 1] = Tau * B * Secant[I];
 		}
 	}
 }
@@ -888,9 +1172,8 @@ float FPianoScore::TimeToX(double Ms) const
 	}
 	if (MapMs.Num() == 1 || Ms <= MapMs[0])
 	{
-		// before the first note, scroll at the speed of the first segment
-		const double Slope = MapMs.Num() > 1 ? (MapX[1] - MapX[0]) / FMath::Max(1.0, MapMs[1] - MapMs[0]) : 0.1;
-		return float(MapX[0] + (Ms - MapMs[0]) * Slope);
+		// before the first note, at the speed it starts with
+		return float(MapX[0] + (Ms - MapMs[0]) * (MapSlope.Num() > 0 && MapSlope[0] > 0.0 ? MapSlope[0] : 0.1));
 	}
 	if (Ms >= MapMs.Last())
 	{
@@ -898,31 +1181,53 @@ float FPianoScore::TimeToX(double Ms) const
 	}
 	const int32 Hi = Algo::UpperBound(MapMs, Ms);
 	const int32 Lo = Hi - 1;
-	const double T = (Ms - MapMs[Lo]) / FMath::Max(1e-6, MapMs[Hi] - MapMs[Lo]);
-	return float(FMath::Lerp(double(MapX[Lo]), double(MapX[Hi]), T));
+	const double H = FMath::Max(1e-6, MapMs[Hi] - MapMs[Lo]);
+	if (MapRunStart[Hi])
+	{
+		// up to a repeat: on at the same speed, then the jump back
+		return float(MapX[Lo] + MapSlope[Lo] * (Ms - MapMs[Lo]));
+	}
+	const double T = (Ms - MapMs[Lo]) / H, T2 = T * T, T3 = T2 * T;
+	return float((2.0 * T3 - 3.0 * T2 + 1.0) * MapX[Lo] + (T3 - 2.0 * T2 + T) * H * MapSlope[Lo]
+		+ (-2.0 * T3 + 3.0 * T2) * MapX[Hi] + (T3 - T2) * H * MapSlope[Hi]);
 }
 
-double FPianoScore::XToTime(float X) const
+double FPianoScore::XToTime(float X, double NearMs) const
 {
-	if (MapX.Num() < 2)
+	if (MapMs.Num() < 2)
 	{
 		return 0.0;
 	}
-	if (X <= MapX[0])
+	// every run (pass) that covers X; within a run x only grows with time
+	double Best = X <= MapX[0] ? MapMs[0] : MapMs.Last();
+	double BestDistance = TNumericLimits<double>::Max();
+	for (int32 First = 0; First < MapMs.Num();)
 	{
-		return MapMs[0];
+		int32 End = First + 1;
+		while (End < MapMs.Num() && !MapRunStart[End])
+		{
+			++End;
+		}
+		double Lo = MapMs[First], Hi = End < MapMs.Num() ? MapMs[End] - 1.0 : MapMs.Last();
+		if (X >= TimeToX(Lo) && X <= TimeToX(Hi))
+		{
+			for (int32 Step = 0; Step < 40; ++Step)
+			{
+				const double Mid = 0.5 * (Lo + Hi);
+				(TimeToX(Mid) < X ? Lo : Hi) = Mid;
+			}
+			if (FMath::Abs(Lo - NearMs) < BestDistance)
+			{
+				BestDistance = FMath::Abs(Lo - NearMs);
+				Best = Lo;
+			}
+		}
+		First = End;
 	}
-	if (X >= MapX.Last())
-	{
-		return MapMs.Last();
-	}
-	const int32 Hi = Algo::UpperBound(MapX, X);
-	const int32 Lo = Hi - 1;
-	const double T = (X - MapX[Lo]) / FMath::Max(1e-6f, MapX[Hi] - MapX[Lo]);
-	return FMath::Lerp(MapMs[Lo], MapMs[Hi], T);
+	return Best;
 }
 
-TArray<FPianoSessionNote> FPianoScore::MakeSessionNotes() const
+TArray<FPianoSessionNote> FPianoScore::MakeSessionNotes(bool bExpressive) const
 {
 	TArray<FPianoSessionNote> Out;
 	Out.Reserve(Notes.Num());
@@ -931,9 +1236,11 @@ TArray<FPianoSessionNote> FPianoScore::MakeSessionNotes() const
 		FPianoSessionNote& S = Out.AddDefaulted_GetRef();
 		S.Pitch = Note.Pitch;
 		S.OnMs = Note.OnMs;
-		S.OffMs = Note.OnMs + FMath::Max(30.0, Note.DurMs);
+		// staccato sounds shorter (the written length stays the beat it takes)
+		const double Length = !bExpressive ? 1.0 : (Note.Artic & ArticStaccatissimo) ? 0.35 : (Note.Artic & ArticStaccato) ? 0.5 : 1.0;
+		S.OffMs = Note.OnMs + FMath::Max(30.0, Note.DurMs * Length);
 		S.Hand = Note.Hand;
-		S.Velocity = 80;
+		S.Velocity = bExpressive ? Note.Velocity : 80;
 		S.bTied = !Note.IsStruck();
 		S.bGrace = Note.bGrace;
 		S.SourceIndex = Out.Num() - 1;

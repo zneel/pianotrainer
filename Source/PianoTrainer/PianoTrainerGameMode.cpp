@@ -1,11 +1,13 @@
 #include "PianoTrainerGameMode.h"
 
+#include "AudioDevice.h"
 #include "AudioMixerBlueprintLibrary.h"
 
 #include "PianoPlayer.h"
 #include "PianoScore.h"
 #include "PianoLibrary.h"
 #include "PianoPhrases.h"
+#include "UI/PianoAppSettings.h"
 #include "UI/PianoCoach.h"
 #include "UI/SPianoApp.h"
 #include "UI/SPianoRuler.h"
@@ -16,6 +18,8 @@
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/GenericWindow.h"
+#include "Widgets/SWindow.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
@@ -50,6 +54,32 @@ void APianoTrainerGameMode::BeginPlay()
 	}
 
 	Player = NewObject<UPianoPlayer>(this);
+	{
+		// the app's saved settings: the instrument before the sound loads, the rest at once
+		FPianoAppSettings AppSettings;
+		AppSettings.Load();
+		AppSettings.ApplyInstrument(Player);
+		AppSettings.Apply(Player);
+		AppSettings.ApplyVSync();
+		int32 Flag = 0; // tests: -expressive=0|1 -scorepedal=0|1, whatever is saved
+		if (FParse::Value(FCommandLine::Get(), TEXT("-expressive="), Flag)) { Player->SetExpressive(Flag != 0); }
+		if (FParse::Value(FCommandLine::Get(), TEXT("-scorepedal="), Flag)) { Player->SetScorePedal(Flag != 0); }
+		// -instrumentcc=20:0,21:0: instrument controls (0..1) for testing, e.g. a sample library's resonance and noise layers
+		FString Controls;
+		if (FParse::Value(FCommandLine::Get(), TEXT("-instrumentcc="), Controls, /*bShouldStopOnSeparator*/ false))
+		{
+			TArray<FString> Pairs;
+			Controls.ParseIntoArray(Pairs, TEXT(","));
+			for (const FString& Pair : Pairs)
+			{
+				FString Cc, Value;
+				if (Pair.Split(TEXT(":"), &Cc, &Value))
+				{
+					Player->SetInstrumentControl(FCString::Atoi(*Cc), FCString::Atof(*Value));
+				}
+			}
+		}
+	}
 	if (!Player->Initialize(GetWorld()))
 	{
 		UE_LOG(LogPianoTrainer, Error, TEXT("Piano player failed to start"));
@@ -164,6 +194,7 @@ void APianoTrainerGameMode::BeginPlay()
 		bCoachTest = FParse::Value(Cmd, TEXT("-coach="), CoachArg);
 		bCoachGroups = FParse::Param(Cmd, TEXT("coachgroups"));
 		bCoachSplit = FParse::Param(Cmd, TEXT("coachsplit"));
+		bPluginWindowTest = FParse::Param(Cmd, TEXT("pluginwindow"));
 		bAutotestPending = true; // starts in Tick once the piano has loaded
 	}
 }
@@ -241,7 +272,14 @@ void APianoTrainerGameMode::Tick(float DeltaSeconds)
 		AutotestStartSeconds = FPlatformTime::Seconds();
 		if (bRecordWav)
 		{
-			UAudioMixerBlueprintLibrary::StartRecordingOutput(this, 120.f);
+			UAudioMixerBlueprintLibrary::StartRecordingOutput(this, 600.f);
+		}
+		// -quiet: nothing out of the speakers (tests run while you work); the recording is taken before the main
+		// output's volume
+		FAudioDevice* Device = GetWorld()->GetAudioDeviceRaw();
+		if (Device && FParse::Param(FCommandLine::Get(), TEXT("quiet")))
+		{
+			Device->SetSubmixOutputVolume(&Device->GetMainSubmixObject(), 0.f);
 		}
 		UE_LOG(LogPianoTrainer, Log, TEXT("Autotest started (sound %d)"), int32(Player->GetSoundState()));
 	}
@@ -261,6 +299,10 @@ void APianoTrainerGameMode::Tick(float DeltaSeconds)
 		const FString ShotPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("PianoLogs/shot.png"));
 		FScreenshotRequest::RequestScreenshot(ShotPath, /*bShowUI*/ true, /*bAddFilenameSuffix*/ false);
 		UE_LOG(LogPianoTrainer, Log, TEXT("Screenshot requested at %.0f ms -> %s"), Player->GetSongMs(), *ShotPath);
+	}
+	if (bPluginWindowTest)
+	{
+		TickPluginWindowTest();
 	}
 	if (bCoachTest)
 	{
@@ -284,6 +326,30 @@ void APianoTrainerGameMode::Tick(float DeltaSeconds)
 	else if (FPlatformTime::Seconds() - AutotestStartSeconds > Timeout)
 	{
 		WriteAutotestReport(TEXT("timeout"));
+	}
+}
+
+void APianoTrainerGameMode::TickPluginWindowTest()
+{
+	const double Elapsed = FPlatformTime::Seconds() - AutotestStartSeconds;
+	if (PluginWindowStep == 0 && Elapsed > 1.0)
+	{
+		PluginWindowStep = 1;
+		const TSharedPtr<SWindow> Window = GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWindow() : nullptr;
+		const bool bOpened = Player->OpenInstrumentWindow(Window && Window->GetNativeWindow() ? Window->GetNativeWindow()->GetOSWindowHandle() : nullptr);
+		UE_LOG(LogPianoTrainer, Log, TEXT("pluginwindow: opened %d, open %d"), bOpened, Player->IsInstrumentWindowOpen());
+	}
+	else if (PluginWindowStep == 1 && Elapsed > 6.0)
+	{
+		PluginWindowStep = 2;
+		Player->CloseInstrumentWindow();
+	}
+	else if (PluginWindowStep == 2 && Elapsed > 6.5)
+	{
+		PluginWindowStep = 3;
+		const FString State = UPianoPlayer::GetPluginStateFile(Player->GetInstrumentPath());
+		UE_LOG(LogPianoTrainer, Log, TEXT("pluginwindow: open after closing %d, state %s, %lld bytes"), Player->IsInstrumentWindowOpen(), *State,
+			IFileManager::Get().FileSize(*State));
 	}
 }
 
@@ -433,6 +499,60 @@ void APianoTrainerGameMode::TickPlanTest()
 				Phrases.BeatAt(Slur.EndMs) - Phrases.BeatAt(Slur.StartMs), Slur.Staff)));
 		}
 		PlanTestResult->SetArrayField(TEXT("slurList"), Slurs);
+
+		// scrolling: how even the line's speed is (every 20 ms; jumps back at repeats left out), and how far each
+		// note's head is from the cursor when its time comes (engraving pixels; a notehead is ~20 wide)
+		TArray<double> Speeds, Errors;
+		for (double Ms = 0.0; Ms + 20.0 < Score->GetLengthMs(); Ms += 20.0)
+		{
+			const double Speed = (Score->TimeToX(Ms + 20.0) - Score->TimeToX(Ms)) / 20.0;
+			if (Speed > 0.0)
+			{
+				Speeds.Add(Speed);
+			}
+		}
+		TArray<double> OnsetMs, OnsetX, OldSpeeds; // the old mapping: straight from notehead to notehead
+		for (const FPianoScoreNote& Note : Score->GetNotes())
+		{
+			if (Note.Head.bIsValid && Note.IsStruck())
+			{
+				Errors.Add(FMath::Abs(Score->TimeToX(Note.OnMs) - Note.Head.GetCenter().X));
+				if (OnsetMs.Num() == 0 || Note.OnMs - OnsetMs.Last() > 1.0)
+				{
+					OnsetMs.Add(Note.OnMs);
+					OnsetX.Add(Note.Head.GetCenter().X);
+				}
+			}
+		}
+		for (int32 I = 0; I + 1 < OnsetMs.Num(); ++I)
+		{
+			const double Speed = (OnsetX[I + 1] - OnsetX[I]) / FMath::Max(1.0, OnsetMs[I + 1] - OnsetMs[I]);
+			for (double Ms = OnsetMs[I]; Speed > 0.0 && Ms < OnsetMs[I + 1]; Ms += 20.0)
+			{
+				OldSpeeds.Add(Speed);
+			}
+		}
+		auto Percentile = [](TArray<double> Values, double P) { Values.Sort(); return Values.Num() > 0 ? Values[FMath::Clamp(int32(P * Values.Num()), 0, Values.Num() - 1)] : 0.0; };
+		double Mean = 0.0, Var = 0.0, Accel = 0.0;
+		for (const double S : Speeds) { Mean += S / FMath::Max(1, Speeds.Num()); }
+		for (int32 I = 0; I < Speeds.Num(); ++I)
+		{
+			Var += FMath::Square(Speeds[I] - Mean) / FMath::Max(1, Speeds.Num());
+			Accel = I > 0 ? FMath::Max(Accel, FMath::Abs(Speeds[I] - Speeds[I - 1]) / Mean) : Accel;
+		}
+		TSharedRef<FJsonObject> Scroll = MakeShared<FJsonObject>();
+		Scroll->SetNumberField(TEXT("speed_cv"), FMath::RoundToInt32(FMath::Sqrt(Var) / FMath::Max(1e-9, Mean) * 1000.0) / 1000.0);
+		Scroll->SetNumberField(TEXT("speed_p95_over_p5"), FMath::RoundToInt32(Percentile(Speeds, 0.95) / FMath::Max(1e-9, Percentile(Speeds, 0.05)) * 100.0) / 100.0);
+		Scroll->SetNumberField(TEXT("max_step_change"), FMath::RoundToInt32(Accel * 1000.0) / 1000.0); // largest change of speed in 20 ms, relative
+		Scroll->SetNumberField(TEXT("note_offset_px_median"), FMath::RoundToInt32(Percentile(Errors, 0.5) * 10.0) / 10.0);
+		Scroll->SetNumberField(TEXT("note_offset_px_p95"), FMath::RoundToInt32(Percentile(Errors, 0.95) * 10.0) / 10.0);
+		Scroll->SetNumberField(TEXT("width_px"), FMath::RoundToInt32(Score->GetSize().X));
+		double OldMean = 0.0, OldVar = 0.0;
+		for (const double S : OldSpeeds) { OldMean += S / FMath::Max(1, OldSpeeds.Num()); }
+		for (const double S : OldSpeeds) { OldVar += FMath::Square(S - OldMean) / FMath::Max(1, OldSpeeds.Num()); }
+		Scroll->SetNumberField(TEXT("note_by_note_speed_cv"), FMath::RoundToInt32(FMath::Sqrt(OldVar) / FMath::Max(1e-9, OldMean) * 1000.0) / 1000.0);
+		Scroll->SetNumberField(TEXT("note_by_note_p95_over_p5"), FMath::RoundToInt32(Percentile(OldSpeeds, 0.95) / FMath::Max(1e-9, Percentile(OldSpeeds, 0.05)) * 100.0) / 100.0);
+		PlanTestResult->SetObjectField(TEXT("scroll"), Scroll);
 		PlanTestResult->SetStringField(TEXT("score"), Score->GetTitle());
 		PlanTestResult->SetNumberField(TEXT("beats"), Phrases.NumBeats);
 		PlanTestResult->SetNumberField(TEXT("slurs"), Score->GetMarks().Slurs.Num());

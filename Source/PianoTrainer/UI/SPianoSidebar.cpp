@@ -208,8 +208,10 @@ TSharedRef<SWidget> SPianoSidebar::MakePracticeTab()
 								Count += (N.Hand == Hand && !N.bTied) ? 1 : 0;
 							}
 						}
-						const bool bYou = X && (uint8(X->GetHands()) & uint8(Hand)) != 0 && !X->GetListenMode();
-						return FText::Format(LOCTEXT("TrackInfo", "{0} notes · {1}"), Count, bYou ? LOCTEXT("You", "you play") : LOCTEXT("App", "the piano plays"));
+						const bool bChosen = X && (uint8(X->GetHands()) & uint8(Hand)) != 0;
+						const bool bListen = X && X->GetListenMode();
+						return FText::Format(LOCTEXT("TrackInfo", "{0} notes · {1}"), Count,
+							bListen ? (bChosen ? LOCTEXT("App", "the piano plays") : LOCTEXT("Silent", "silent")) : (bChosen ? LOCTEXT("You", "you play") : LOCTEXT("App", "the piano plays")));
 					})
 				]
 			]

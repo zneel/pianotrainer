@@ -10,6 +10,12 @@
 	"Installed": false,
 	"Modules": [
 		{
+			"Name": "PianoVst3",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Mac" ]
+		},
+		{
 			"Name": "PianoKit",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"

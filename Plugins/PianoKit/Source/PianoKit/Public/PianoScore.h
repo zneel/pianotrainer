@@ -19,7 +19,33 @@ struct FPianoScoreNote
 	// For the later notes of a tie: index of the tie's first note (which carries the whole duration). Else INDEX_NONE.
 	int32 TieRoot = INDEX_NONE;
 	bool bGrace = false; // ornament: playable and scored when played, but wait mode doesn't stop for it
+	uint8 Artic = 0;     // EPianoArtic flags from the score
+	uint8 Velocity = 80; // how the app plays it (FPianoExpression: dynamics, voicing, accents)
 	bool IsStruck() const { return TieRoot == INDEX_NONE; }
+};
+
+enum EPianoArtic : uint8
+{
+	ArticAccent = 1,
+	ArticMarcato = 2,
+	ArticStaccato = 4,
+	ArticStaccatissimo = 8,
+	ArticTenuto = 16,
+};
+
+// A dynamic mark: a level (MIDI velocity for pp..fff, 0 for none) and/or a sudden accent (sf, fz, rf).
+struct FPianoScoreDynamic
+{
+	double Ms = 0.0;
+	int32 Level = 0;
+	bool bAccent = false;
+};
+
+// A hairpin, or a written "cresc." / "dim." (to the next dynamic, at most two bars).
+struct FPianoScoreHairpin
+{
+	double StartMs = 0.0, EndMs = 0.0;
+	bool bCrescendo = true;
 };
 
 struct FPianoScoreMeasure
@@ -45,6 +71,9 @@ struct FPianoScoreMarks
 	TArray<FPianoScoreSlur> Slurs;
 	TArray<FVector2D> Fermatas; // onset and end (ms) of each note or chord with a fermata
 	int32 KeyFifths = 0;        // the first key signature: sharps > 0, flats < 0
+	TArray<FPianoScoreDynamic> Dynamics; // by time
+	TArray<FPianoScoreHairpin> Hairpins;
+	TArray<FVector2D> Pedals;   // sustain pedal marks by time: (ms, 1 down / 0 up)
 };
 
 class PIANOKIT_API FPianoScore
@@ -73,13 +102,16 @@ public:
 	// Measure playing at Ms (0 before the first).
 	int32 GetMeasureAt(double Ms) const;
 
-	// Scroll mapping between song time and x on the engraved line (SVG pixels).
+	// Scroll mapping between song time and x on the engraved line (SVG pixels). It moves at an even speed: anchored on
+	// each bar's downbeat and smooth between (a monotone cubic), not note by note; at a repeat it jumps back.
 	float TimeToX(double Ms) const;
-	double XToTime(float X) const;
+	// The time at x - of the passes over it (repeats), the one nearest NearMs.
+	double XToTime(float X, double NearMs = 0.0) const;
 
 	lunasvg::Document* GetDocument() const { return Document.Get(); }
 	// What the sequencer plays: one entry per score note (SourceIndex = its index here), sorted by time.
-	TArray<FPianoSessionNote> MakeSessionNotes() const;
+	// Expressive: with the score's dynamics, voicing and articulation (FPianoExpression); else every note alike.
+	TArray<FPianoSessionNote> MakeSessionNotes(bool bExpressive = true) const;
 
 	static FString GetVerovioDataDir();
 	static FString FindMuseScore();
@@ -99,6 +131,8 @@ private:
 
 	TArray<double> MapMs;
 	TArray<float> MapX;
+	TArray<double> MapSlope;    // dx/dms at each anchor
+	TArray<bool> MapRunStart;   // the line jumps back to here (a repeat)
 
 	TUniquePtr<lunasvg::Document> Document;
 };

@@ -135,7 +135,8 @@ int32 SPianoKeyboard::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedG
 			{
 				break;
 			}
-			if (Now < Note.OffMs && !Note.bTied && (bListen || (uint8(Note.Hand) & Hands) == 0))
+			// listening: the chosen hand(s); practising: the other hand
+			if (Now < Note.OffMs && !Note.bTied && (bListen ? (uint8(Note.Hand) & Hands) != 0 : (uint8(Note.Hand) & Hands) == 0))
 			{
 				Accompaniment[Note.Pitch & 127] = true;
 			}

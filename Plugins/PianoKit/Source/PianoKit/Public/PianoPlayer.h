@@ -62,16 +62,47 @@ class PIANOKIT_API UPianoPlayer : public UObject, public FTickableGameObject
 	GENERATED_BODY()
 
 public:
-	// Instrument played by sfizz: the Salamander Grand Piano SFZ in the plugin folder (tools/fetch_salamander.py puts
-	// it there). Without it a plain built-in tone plays, so the app still makes sound.
-	static constexpr const TCHAR* InstrumentFile = TEXT("ThirdParty/Salamander/Salamander Grand Piano V3.sfz");
-	static constexpr int32 InstrumentVoices = 1024; // sfizz voice limit (-voices=N overrides)
+	// The instrument: an SFZ file played by sfizz, or a VST 3 plug-in (.vst3) - the one set (Settings > Sound), else the
+	// first .sfz found in the Instruments folders (FindInstruments). The piano samples are not part of the app: Piano in
+	// 162 (Ivy Audio) is free to use but not to redistribute, so each player puts their own copy there. Without one a
+	// plain tone plays.
+	// sfizz voice limit (-voices=N overrides). Each note also starts release samples (string resonance, hammer) that
+	// ring on; a fast pedalled passage filled 1024 voices in 20 s and sfizz took longer than the block to render them
+	// (starved output, crackling). Past this, sfizz takes over the quietest voices with a short fade.
+	static constexpr int32 InstrumentVoices = 256;
+	// <project or app>/Instruments and <user data>/PianoTrainer/Instruments, searched for .sfz files (largest folders first).
+	static TArray<FString> GetInstrumentFolders();
+	static TArray<FString> FindInstruments();
+	// Use this SFZ or .vst3 (empty: find an SFZ); an SFZ loads in the background, a plug-in at once.
+	void SetInstrumentPath(const FString& Path);
+	const FString& GetInstrumentPath() const { return InstrumentPath; } // what is loaded (or loading)
+
+	// VST 3 instruments on this computer (Common Files\VST3; Library/Audio/Plug-Ins/VST3) and in the Instruments folders.
+	static TArray<FString> FindPlugins();
+	bool IsPluginPlaying() const;
+	// Why the chosen plug-in is not playing (empty when it is, or when none was chosen).
+	const FString& GetPluginError() const { return PluginError; }
+	// The plug-in's own window (its instruments, presets, settings), in front of the app's window. What is chosen in it
+	// is kept, per plug-in, when it closes and when the app quits, and restored the next time the plug-in loads.
+	bool OpenInstrumentWindow(void* ParentWindowHandle);
+	void CloseInstrumentWindow();
+	bool IsInstrumentWindowOpen() const;
+	// Where a plug-in's state is kept (<user data>/PianoTrainer/PluginStates).
+	static FString GetPluginStateFile(const FString& PluginPath);
 
 	// The instrument loads in the background (~2.5 s); the graph is silent until then.
 	enum class ESoundState : uint8 { Loading, Ready, Fallback, Failed };
 	ESoundState GetSoundState() const;
 	// Attribution for the piano samples in use (empty until they are loaded, and for the built-in tone).
 	FString GetSoundCredit() const;
+	// sfizz's resampling quality for live play, 0-10 (2: Hermite, its default; 4: windowed sinc).
+	void SetSampleQuality(int32 Quality);
+	int32 GetSampleQuality() const { return SampleQuality; }
+	// The instrument's level in dB (0 = as recorded).
+	void SetInstrumentVolume(float Db);
+	float GetInstrumentVolume() const { return InstrumentVolumeDb; }
+	// An instrument control, sent as a high-resolution MIDI CC (e.g. a sample library's microphone mix), 0..1.
+	void SetInstrumentControl(int32 Cc, float Value);
 
 	bool Initialize(UWorld* World);
 	void Shutdown();
@@ -124,8 +155,15 @@ public:
 	EPianoHand GetHands() const;
 	void SetTempoScale(float Scale);
 	float GetTempoScale() const;
-	void SetListenMode(bool bEnabled); // the app plays every hand (demo)
+	void SetListenMode(bool bEnabled); // the app plays the chosen hand(s), for listening
 	bool GetListenMode() const;
+	// How the app plays the score: with its dynamics, voicing and articulation (FPianoExpression), or every note alike.
+	void SetExpressive(bool bEnabled);
+	bool GetExpressive() const { return bExpressive; }
+	// The score's pedal marks with what the app plays; once the player uses their own pedal, theirs (except listening).
+	void SetScorePedal(bool bEnabled);
+	bool GetScorePedal() const { return bScorePedalSetting; }
+	bool IsScorePedalActive() const;
 	void SetEchoLiveKeys(bool bEnabled); // sound the player's own keys (off if the piano makes its own sound)
 	bool GetEchoLiveKeys() const;
 	void SetLoop(double StartMs, double EndMs);
@@ -135,13 +173,23 @@ public:
 	// Live input (MIDI keyboards are bound automatically; the UI calls these for the computer keyboard)
 	void NoteOn(int32 Pitch, int32 Velocity = 100);
 	void NoteOff(int32 Pitch);
-	// Sustain pedal (MIDI CC64 from keyboards is bound automatically).
-	void SetSustainPedal(bool bDown);
+	// Sustain pedal (MIDI CC64 from keyboards is bound automatically). bFromPlayer: the player's own pedal (not automation).
+	void SetSustainPedal(bool bDown, bool bFromPlayer = true);
 	bool IsPedalDown() const { return bPedal; }
 	bool IsKeyHeld(int32 Pitch) const { return Pitch >= 0 && Pitch < 128 && Held[Pitch]; }
 	// Verdict on the latest press of this key: 1 right, 0 wrong, -1 not judged (yet, or listen mode).
 	int32 GetPressResult(int32 Pitch) const { return PressResult.IsValidIndex(Pitch) ? PressResult[Pitch] : -1; }
 	const TArray<FString>& GetMidiDeviceNames() const { return MidiDeviceNames; }
+	// Seconds since a device last sent anything (large if never).
+	double GetMidiDeviceIdleSeconds(int32 Device) const;
+	// Looks for keyboards again now (also done every 3 s).
+	void RescanMidiDevices();
+	// Key velocity from a MIDI keyboard, reshaped: out = 127 * (in / 127) ^ Curve (< 1 lighter touch, > 1 heavier).
+	void SetVelocityCurve(float Curve) { VelocityCurve = FMath::Clamp(Curve, 0.3f, 3.f); }
+	float GetVelocityCurve() const { return VelocityCurve; }
+	// Some pedals report pressed as 0 and released as 127.
+	void SetPedalInverted(bool bInverted) { bPedalInverted = bInverted; }
+	bool GetPedalInverted() const { return bPedalInverted; }
 
 	// Feedback for the UI
 	EPianoNoteState GetNoteState(int32 NoteIndex) const;
@@ -239,6 +287,22 @@ private:
 	bool bSmoothValid = false;
 
 	bool bPedal = false;
+	bool bExpressive = true;
+	bool bScorePedalSetting = true;
+	bool bPlayerPedalUsed = false;
+	void UpdateScorePedal();
+	FString InstrumentPath;
+	UWorld* InstrumentWorld = nullptr;
+	TWeakPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Plugin; // the session's synth owns it
+	FString PluginError;
+	bool LoadPlugin(UWorld* World, float SampleRate);
+	void SavePluginState() const;
+	int32 SampleQuality = 2;
+	float InstrumentVolumeDb = -6.f;
+	TMap<int32, float> InstrumentControls; // re-sent when an instrument loads
+	float VelocityCurve = 1.f;
+	bool bPedalInverted = false;
+	TArray<double> MidiActivitySeconds;
 	bool bAutoplay = false;
 	bool bAutoPedal = false;
 	int32 AutoPedalMeasure = 0;

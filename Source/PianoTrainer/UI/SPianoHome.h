@@ -4,6 +4,7 @@
 //   Diary    - practice days this week, what is due (sections to check or play through, pieces to relearn), each
 //              piece's plan progress, and the latest sessions (Bernhard: keep a practice diary)
 //   Library  - the bundled samples, recent files, open a file
+//   Settings - display, sound (the piano samples), MIDI keyboard, playback (SPianoSettingsPage); and Quit
 #pragma once
 
 #include "CoreMinimal.h"
@@ -11,6 +12,7 @@
 
 class FPianoCoach;
 class SBox;
+class UPianoPlayer;
 struct FPianoLibraryEntry;
 
 class SPianoHome : public SCompoundWidget
@@ -25,15 +27,18 @@ public:
 		SLATE_ARGUMENT(TFunction<void()>, OnContinue)
 		SLATE_ARGUMENT(TFunction<FText()>, ContinueLabel)
 		SLATE_ARGUMENT(FPianoCoach*, Coach)
+		SLATE_ARGUMENT(TFunction<FText()>, SoundCredit) // the piano samples in use
+		SLATE_ARGUMENT(TWeakObjectPtr<UPianoPlayer>, Player)
 		SLATE_ARGUMENT(TFunction<void(const FString& Piece, int32 Section)>, OnPractiseSection)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
 	// Rebuilds the parts that change while the app runs (recent pieces).
 	void Refresh();
+	void ShowSettings() { CurrentPage = PageSettings; }
 
 private:
-	enum EPage { PageHome, PageEtudes, PageDiary, PageLibrary };
+	enum EPage { PageHome, PageEtudes, PageDiary, PageLibrary, PageSettings };
 	TSharedRef<SWidget> MakeRail();
 	TSharedRef<SWidget> MakeHomePage();
 	TSharedRef<SWidget> MakeEtudesPage();
@@ -51,6 +56,8 @@ private:
 	TSharedPtr<SBox> RecentBox;
 	TSharedPtr<SBox> DiaryBox;
 	FPianoCoach* Coach = nullptr;
+	TFunction<FText()> SoundCredit;
+	TWeakObjectPtr<UPianoPlayer> Player;
 	TFunction<void(const FString&, int32)> OnPractiseSection;
 	int32 CurrentPage = PageHome;
 	int32 SelectedEtude = INDEX_NONE;

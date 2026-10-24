@@ -1,6 +1,7 @@
 #include "SPianoHome.h"
 
 #include "PianoCoach.h"
+#include "SPianoSettingsPage.h"
 #include "PianoStyle.h"
 #include "PianoWidgets.h"
 
@@ -60,7 +61,8 @@ void SPianoHome::Construct(const FArguments& InArgs)
 	FString Page; // -menupage=etudes|diary|library: open on that page (screenshots)
 	if (FParse::Value(FCommandLine::Get(), TEXT("-menupage="), Page))
 	{
-		CurrentPage = Page == TEXT("etudes") ? PageEtudes : Page == TEXT("diary") ? PageDiary : Page == TEXT("library") ? PageLibrary : PageHome;
+		CurrentPage = Page == TEXT("etudes") ? PageEtudes : Page == TEXT("diary") ? PageDiary : Page == TEXT("library") ? PageLibrary
+			: Page == TEXT("settings") ? PageSettings : PageHome;
 	}
 	Library = InArgs._Library;
 	RecentEntries = InArgs._RecentEntries;
@@ -69,6 +71,8 @@ void SPianoHome::Construct(const FArguments& InArgs)
 	OnContinue = InArgs._OnContinue;
 	ContinueLabel = InArgs._ContinueLabel;
 	Coach = InArgs._Coach;
+	SoundCredit = InArgs._SoundCredit;
+	Player = InArgs._Player;
 	OnPractiseSection = InArgs._OnPractiseSection;
 	SelectedEtude = Library().IndexOfByPredicate([](const FPianoLibraryEntry& E) { return E.File.StartsWith(TEXT("Etudes/")); });
 
@@ -89,6 +93,7 @@ void SPianoHome::Construct(const FArguments& InArgs)
 				+ SWidgetSwitcher::Slot()[MakeEtudesPage()]
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[SAssignNew(DiaryBox, SBox)[MakeDiary()]]]
 				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[MakeLibraryPage()]]
+				+ SWidgetSwitcher::Slot()[SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(40.f, 34.f))[SNew(SPianoSettingsPage).Player(Player)]]
 			]
 		]
 	];
@@ -150,11 +155,21 @@ TSharedRef<SWidget> SPianoHome::MakeRail()
 					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavEtudes", "Études"), PageEtudes)]
 					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavDiary", "Diary"), PageDiary)]
 					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavLibrary", "Library"), PageLibrary)]
+					+ SVerticalBox::Slot().AutoHeight()[Nav(LOCTEXT("NavSettings", "Settings"), PageSettings)]
 					+ SVerticalBox::Slot().FillHeight(1.f)[SNullWidget::NullWidget]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(FMargin(0.f, 0.f, 0.f, 12.f))
+					[
+						PianoUI::Button(LOCTEXT("Quit", "Quit"), []() { FPlatformMisc::RequestExit(false, TEXT("Quit from the menu")); }, PianoUI::EButton::Ghost, false, true, 10)
+					]
 					+ SVerticalBox::Slot().AutoHeight()
 					[
 						SNew(STextBlock).Font(PianoStyle::Font(8)).ColorAndOpacity(PianoStyle::TextFaint).AutoWrapText(true)
-						.Text(LOCTEXT("Credits", "Piano: Salamander Grand Piano V3 by Alexander Holm (CC-BY 3.0), played by sfizz.\nÉtudes: Chopin first editions, © The Fryderyk Chopin Institute (CC BY 4.0).\nEngraving: Verovio."))
+						.Text_Lambda([this]()
+						{
+							const FText Piano = SoundCredit ? SoundCredit() : FText::GetEmpty();
+							return FText::Format(LOCTEXT("Credits", "{0}Études: Chopin first editions, © The Fryderyk Chopin Institute (CC BY 4.0).\nEngraving: Verovio."),
+								Piano.IsEmpty() ? FText::GetEmpty() : FText::Format(LOCTEXT("PianoCredit", "{0}.\n"), Piano));
+						})
 					]
 				]
 			]

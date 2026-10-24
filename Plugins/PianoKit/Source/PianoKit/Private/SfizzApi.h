@@ -22,6 +22,8 @@ struct FSfizzApi
 	void (*send_note_on)(sfizz_synth_t* Synth, int Delay, int Note, int Velocity) = nullptr;
 	void (*send_note_off)(sfizz_synth_t* Synth, int Delay, int Note, int Velocity) = nullptr;
 	void (*send_cc)(sfizz_synth_t* Synth, int Delay, int Cc, int Value) = nullptr;
+	void (*send_hdcc)(sfizz_synth_t* Synth, int Delay, int Cc, float NormValue) = nullptr;
+	void (*set_sample_quality)(sfizz_synth_t* Synth, int Mode, int Quality) = nullptr; // Mode 0: live
 	void (*all_sound_off)(sfizz_synth_t* Synth) = nullptr;
 	void (*render_block)(sfizz_synth_t* Synth, float** Channels, int NumChannels, int NumFrames) = nullptr;
 

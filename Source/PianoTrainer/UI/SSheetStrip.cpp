@@ -61,7 +61,7 @@ double SSheetStrip::LocalXToSongMs(const FGeometry& Geometry, float LocalX) cons
 	}
 	float Scale, OffsetX;
 	GetMapping(Geometry, P->GetSongMs(), Scale, OffsetX);
-	return Score->XToTime((LocalX - OffsetX) / Scale);
+	return Score->XToTime((LocalX - OffsetX) / Scale, P->GetSongMs());
 }
 
 int32 SSheetStrip::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
@@ -237,7 +237,7 @@ FReply SSheetStrip::OnMouseMove(const FGeometry& MyGeometry, const FPointerEvent
 	GetMapping(MyGeometry, ScrubAnchorMs, Scale, OffsetX);
 	const float LocalX = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()).X;
 	const float StripX = Score->TimeToX(ScrubAnchorMs) - (LocalX - ScrubAnchorX) / Scale;
-	P->Seek(Score->XToTime(StripX));
+	P->Seek(Score->XToTime(StripX, P->GetSongMs()));
 	return FReply::Handled();
 }
 
@@ -255,7 +255,7 @@ FReply SSheetStrip::OnMouseButtonUp(const FGeometry& MyGeometry, const FPointerE
 		// a click (no drag): jump to the clicked spot
 		float Scale, OffsetX;
 		GetMapping(MyGeometry, ScrubAnchorMs, Scale, OffsetX);
-		P->Seek(P->GetScore()->XToTime((LocalX - OffsetX) / Scale));
+		P->Seek(P->GetScore()->XToTime((LocalX - OffsetX) / Scale, P->GetSongMs()));
 	}
 	if (P && bWasPlayingBeforeScrub)
 	{

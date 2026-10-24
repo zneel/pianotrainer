@@ -108,6 +108,10 @@ namespace PianoKit::SequencerNode
 			BoundSessionId = 0;
 			Notes.Reset();
 			NotesVersion = 0;
+			Pedals.Reset();
+			PedalsVersion = 0;
+			NextPedal = 0;
+			bScorePedalDown = false;
 			Sounding.Reset();
 			LiveDown.Init(false, 128);
 			SongMs = 0.0;
@@ -115,6 +119,25 @@ namespace PianoKit::SequencerNode
 		}
 
 		void Execute()
+		{
+			const uint64 Start = bAudioStats ? FPlatformTime::Cycles64() : 0;
+			ExecuteBlock();
+			if (bAudioStats)
+			{
+				// -audiostats: once a second, the longest block (a wait on the session's locks would show here)
+				const double Us = FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - Start) * 1000.0;
+				StatMaxUs = FMath::Max(StatMaxUs, Us);
+				StatSumUs += Us;
+				if (++StatBlocks * FramesPerBlock >= SampleRate)
+				{
+					UE_LOG(LogTemp, Display, TEXT("audiostats: sequencer %.0f us mean, %.0f us max"), StatSumUs / StatBlocks, StatMaxUs);
+					StatBlocks = 0;
+					StatSumUs = StatMaxUs = 0.0;
+				}
+			}
+		}
+
+		void ExecuteBlock()
 		{
 			MidiOut->PrepareBlock();
 			if (LiveDown.Num() != 128)
@@ -128,6 +151,7 @@ namespace PianoKit::SequencerNode
 				return;
 			}
 			SyncNotes();
+			SyncPedals();
 			const uint8 Hands = Session->UserHands.load(std::memory_order_relaxed);
 			const bool bListen = Session->bPlayUserHands.load(std::memory_order_relaxed);
 			if (Hands != GroupsHands)
@@ -200,6 +224,7 @@ namespace PianoKit::SequencerNode
 				{
 					AllAccompanimentOff(0);
 				}
+				SetScorePedal(0, false); // paused: nothing rings on
 				bWaiting = false;
 				bCountIn = false;
 				Session->CountInLeft.store(0, std::memory_order_relaxed);
@@ -302,6 +327,36 @@ namespace PianoKit::SequencerNode
 			}
 		}
 
+		void SyncPedals()
+		{
+			if (Session->GetPedalsVersion() != PedalsVersion)
+			{
+				Pedals = Session->GetPedals(PedalsVersion);
+				NextPedal = Algo::LowerBoundBy(*Pedals, SongMs, [](const FVector2D& P) { return P.X; });
+			}
+			// the player's own pedal took over (or the setting changed): let the score's go
+			if (!Session->bScorePedal.load(std::memory_order_relaxed))
+			{
+				SetScorePedal(0, false);
+			}
+		}
+
+		// The score's sustain pedal (CC64) as the app plays, at its marks; the state it should be in at a time.
+		void SetScorePedal(int32 Frame, bool bDown)
+		{
+			if (bDown != bScorePedalDown)
+			{
+				bScorePedalDown = bDown;
+				EmitControl(AccompVoices, Frame, 64, bDown ? 127 : 0);
+			}
+		}
+
+		bool ScorePedalAt(double Ms) const
+		{
+			const int32 Index = Pedals.IsValid() ? Algo::UpperBoundBy(*Pedals, Ms, [](const FVector2D& P) { return P.X; }) - 1 : -1;
+			return Index >= 0 && (*Pedals)[Index].Y > 0.5;
+		}
+
 		void SyncNotes()
 		{
 			if (Session->GetNotesVersion() == NotesVersion)
@@ -369,6 +424,11 @@ namespace PianoKit::SequencerNode
 			}
 			NextOnIndex = Algo::LowerBoundBy(*Notes, SongMs - 0.5, &FPianoSessionNote::OnMs);
 			MissSweepIndex = NextOnIndex;
+			if (Pedals.IsValid())
+			{
+				NextPedal = Algo::LowerBoundBy(*Pedals, SongMs, [](const FVector2D& P) { return P.X; });
+				SetScorePedal(0, Session->bScorePedal.load(std::memory_order_relaxed) && ScorePedalAt(SongMs));
+			}
 			for (int32 Index = NextOnIndex; Index < Hit.Num(); ++Index)
 			{
 				Hit[Index] = 0;
@@ -395,11 +455,23 @@ namespace PianoKit::SequencerNode
 				}
 			}
 
+			// the score's pedal marks, before the notes they hold
+			const bool bScorePedal = Session->bScorePedal.load(std::memory_order_relaxed);
+			while (Pedals.IsValid() && NextPedal < Pedals->Num() && (*Pedals)[NextPedal].X < TargetMs)
+			{
+				if (bScorePedal)
+				{
+					SetScorePedal(FrameOf((*Pedals)[NextPedal].X), (*Pedals)[NextPedal].Y > 0.5);
+				}
+				++NextPedal;
+			}
+
 			const bool bListen = Session->bPlayUserHands.load(std::memory_order_relaxed);
 			while (NextOnIndex < Notes->Num() && (*Notes)[NextOnIndex].OnMs < TargetMs)
 			{
 				const FPianoSessionNote& N = (*Notes)[NextOnIndex];
-				if (!N.bTied && (bListen || !IsUserNote(N)))
+				// listening: the chosen hand(s); practising: the other hand, for the player
+				if (!N.bTied && (bListen ? IsUserNote(N) : !IsUserNote(N)))
 				{
 					const int32 Frame = FrameOf(N.OnMs);
 					for (int32 Index = Sounding.Num() - 1; Index >= 0; --Index)
@@ -571,11 +643,18 @@ namespace PianoKit::SequencerNode
 		FMidiStreamWriteRef MidiOut;
 		int32 FramesPerBlock = 256;
 		float SampleRate = 48000.f;
+		const bool bAudioStats = FParse::Param(FCommandLine::Get(), TEXT("audiostats"));
+		int32 StatBlocks = 0;
+		double StatSumUs = 0.0, StatMaxUs = 0.0;
 
 		TSharedPtr<FPianoSession, ESPMode::ThreadSafe> Session;
 		int32 BoundSessionId = 0;
 		FPianoSession::FNoteListPtr Notes;
 		uint32 NotesVersion = 0;
+		FPianoSession::FPedalListPtr Pedals;
+		uint32 PedalsVersion = 0;
+		int32 NextPedal = 0;
+		bool bScorePedalDown = false;
 		double LastOffMs = 0.0;
 
 		double SongMs = 0.0;

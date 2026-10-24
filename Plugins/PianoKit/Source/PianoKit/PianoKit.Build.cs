@@ -30,6 +30,7 @@ public class PianoKit : ModuleRules
 			"HarmonixDsp",
 			"HarmonixMidi",
 			"HarmonixMetasound",
+			"PianoVst3", // VST 3 instruments
 		});
 
 		PrivateDefinitions.AddRange(new string[]
@@ -52,8 +53,7 @@ public class PianoKit : ModuleRules
 		RuntimeDependencies.Add(System.IO.Path.Combine(Sfizz, "LICENSE.txt"), StagedFileType.NonUFS);
 		RuntimeDependencies.Add(System.IO.Path.Combine(Sfizz, "LICENSE.abseil.txt"), StagedFileType.NonUFS);
 
-		// Salamander Grand Piano V3 (CC-BY 3.0): the SFZ, its tables and FLAC samples, read by sfizz from disk, plus
-		// its licence and credit; shipped as loose files next to the app.
-		RuntimeDependencies.Add(System.IO.Path.Combine(PluginDirectory, "ThirdParty", "Salamander", "..."), StagedFileType.NonUFS);
+		// The piano samples are not shipped: Piano in 162 (Ivy Audio) may be used but not redistributed, so each
+		// player keeps their own copy in an Instruments folder (UPianoPlayer::GetInstrumentFolders).
 	}
 }

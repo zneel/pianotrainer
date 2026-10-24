@@ -148,7 +148,7 @@ void SFallingNotes::Tick(const FGeometry& Geometry, const double CurrentTime, co
 			float X0 = 0.f, X1 = 0.f;
 			SPianoKeyboard::KeyX(N.Pitch, LastWidth, X0, X1);
 			const FTone& Tone = bUser ? Played : (bByHand && N.Hand == EPianoHand::Left ? Copper : Gold);
-			Burst((X0 + X1) * 0.5f, X1 - X0, Tone.Glow, bUser || bListen ? 12 : 5);
+			Burst((X0 + X1) * 0.5f, X1 - X0, Tone.Glow, bUser || (bListen && (uint8(N.Hand) & Hands) != 0) ? 12 : 5);
 		}
 	}
 	LastNowMs = Now;
@@ -220,7 +220,7 @@ int32 SFallingNotes::OnPaint(const FPaintArgs&, const FGeometry& Geometry, const
 			continue;
 		}
 		const bool bUser = !bListen && (uint8(N.Hand) & Hands) != 0;
-		const bool bBright = bListen || bUser; // dim only the hand the app plays while you practise the other
+		const bool bBright = bListen ? (uint8(N.Hand) & Hands) != 0 : bUser; // listening: the chosen hand(s) bright; practising: yours
 		const EPianoNoteState State = P->GetNoteState(N.SourceIndex);
 		const FTone& Tone = bUser && State == EPianoNoteState::Hit ? Played : bUser && State == EPianoNoteState::Missed ? Missed
 			: (bByHand && N.Hand == EPianoHand::Left ? Copper : Gold);

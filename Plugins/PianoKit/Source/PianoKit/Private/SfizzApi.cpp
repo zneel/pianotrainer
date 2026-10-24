@@ -2,7 +2,9 @@
 
 #include "PianoKitLog.h"
 #include "PianoSession.h"
+#include "PianoVst3Plugin.h"
 
+#include "Async/Async.h"
 #include "HAL/PlatformProcess.h"
 
 FSfizzApi& FSfizzApi::Get()
@@ -44,6 +46,8 @@ bool FSfizzApi::Load(void* DllHandle)
 	Resolve(send_note_on, TEXT("sfizz_send_note_on"));
 	Resolve(send_note_off, TEXT("sfizz_send_note_off"));
 	Resolve(send_cc, TEXT("sfizz_send_cc"));
+	Resolve(send_hdcc, TEXT("sfizz_send_hdcc"));
+	Resolve(set_sample_quality, TEXT("sfizz_set_sample_quality"));
 	Resolve(all_sound_off, TEXT("sfizz_all_sound_off"));
 	Resolve(render_block, TEXT("sfizz_render_block"));
 	bLoaded = bAll;
@@ -55,5 +59,10 @@ FPianoSynth::~FPianoSynth()
 	if (Synth && FSfizzApi::Get().IsLoaded())
 	{
 		FSfizzApi::Get().free(Synth);
+	}
+	// the audio node usually lets go last; a plug-in is shut down where it was made
+	if (Plugin.IsValid() && !IsInGameThread())
+	{
+		AsyncTask(ENamedThreads::GameThread, [Last = MoveTemp(Plugin)]() mutable { Last.Reset(); });
 	}
 }

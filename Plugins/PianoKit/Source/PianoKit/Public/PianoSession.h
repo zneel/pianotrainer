@@ -27,14 +27,27 @@ struct FPianoSessionNote
 };
 
 struct sfizz_synth_t;
+class FPianoVst3Plugin;
 
-// A loaded sfizz instrument: loaded on the game thread (UPianoPlayer), played by the PianoKit Sfizz node.
+// A loaded instrument - an SFZ in sfizz, or a VST 3 plug-in: loaded on the game thread (UPianoPlayer), played by the
+// PianoKit Sfizz node. A plug-in is released on the game thread, whichever thread lets go of it last.
 struct PIANOKIT_API FPianoSynth
 {
 	sfizz_synth_t* Synth = nullptr;
+	TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Plugin;
 	float SampleRate = 0.f;      // what it is configured for; the node reconfigures it if the graph runs at another rate
 	int32 SamplesPerBlock = 0;
 	~FPianoSynth();
+
+	// Settings the game thread changes and the node applies before it renders (sfizz wants them on that thread).
+	void SetQuality(int32 InQuality) { FScopeLock Guard(&SettingsLock); Quality = InQuality; ++SettingsVersion; }
+	void SetVolumeDb(float InVolumeDb) { FScopeLock Guard(&SettingsLock); VolumeDb = InVolumeDb; ++SettingsVersion; }
+	void SetControl(int32 Cc, float Value) { FScopeLock Guard(&SettingsLock); Controls.Add(Cc, Value); ++SettingsVersion; }
+	std::atomic<uint32> SettingsVersion{1};
+	FCriticalSection SettingsLock;
+	int32 Quality = 2;
+	float VolumeDb = 0.f;
+	TMap<int32, float> Controls;
 };
 
 // Commands from the game thread, applied by the sequencer in the order they were sent
@@ -86,6 +99,13 @@ public:
 	FNoteListPtr GetNotes(uint32& OutVersion) const;
 	uint32 GetNotesVersion() const { return NotesVersion.load(std::memory_order_acquire); }
 
+	// Game thread: the score's sustain pedal marks, (song ms, 1 down / 0 up) sorted by time; played when bScorePedal.
+	using FPedalList = TArray<FVector2D>;
+	using FPedalListPtr = TSharedPtr<const FPedalList, ESPMode::ThreadSafe>;
+	void SetPedals(FPedalList&& InPedals);
+	FPedalListPtr GetPedals(uint32& OutVersion) const;
+	uint32 GetPedalsVersion() const { return PedalsVersion.load(std::memory_order_acquire); }
+
 	// Game thread: the instrument the PianoKit Sfizz node plays. Audio thread: current one (version changes on update).
 	using FSynthPtr = TSharedPtr<FPianoSynth, ESPMode::ThreadSafe>;
 	void SetSynth(FSynthPtr InSynth);
@@ -106,6 +126,7 @@ public:
 	std::atomic<int32> CountInLeft{0};    // published: clicks still to come (0 = playing)
 	std::atomic<bool> bCountInRequest{false}; // count in again while playing (the clock waits for the clicks)
 	std::atomic<float> InputLatencyMs{0.f}; // play-along judges presses this much earlier (keyboard + audio latency)
+	std::atomic<bool> bScorePedal{false};  // play the score's pedal marks with what the app plays
 
 	// Game thread -> audio thread.
 	void PushLive(const FPianoLiveEvent& Event) { LiveIn.Enqueue(Event); }
@@ -129,6 +150,9 @@ private:
 	mutable FCriticalSection NotesLock;
 	FNoteListPtr Notes = MakeShared<const FNoteList, ESPMode::ThreadSafe>();
 	std::atomic<uint32> NotesVersion{1};
+
+	FPedalListPtr Pedals = MakeShared<const FPedalList, ESPMode::ThreadSafe>();
+	std::atomic<uint32> PedalsVersion{1};
 
 	FSynthPtr Synth;
 	std::atomic<uint32> SynthVersion{0};

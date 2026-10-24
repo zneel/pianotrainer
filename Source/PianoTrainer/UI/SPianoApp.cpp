@@ -70,6 +70,8 @@ void SPianoApp::Construct(const FArguments& InArgs)
 			.RecentEntries([this]() { return GetRecentEntries(); })
 			.OnPractise([this](const FPianoLibraryEntry& Entry) { Practise(Entry); })
 			.Coach(Coach.Get())
+			.SoundCredit([this]() { const UPianoPlayer* P = Player.Get(); return P ? FText::FromString(P->GetSoundCredit()) : FText::GetEmpty(); })
+			.Player(Player)
 			.OnPractiseSection([this](const FString& Piece, int32 Section) { PractiseSection(Piece, Section); })
 			.OnOpenFile([this]() { ShowOpenDialog(); })
 			.OnContinue([this]()
@@ -133,7 +135,11 @@ TSharedRef<SWidget> SPianoApp::MakeTopBar()
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
-				Button(LOCTEXT("Panel", "Settings"), [this]() { bSidebar = !bSidebar; }, EButton::Ghost, TAttribute<bool>::CreateLambda([this]() { return bSidebar; }), true, 10)
+				Button(LOCTEXT("Panel", "Panel"), [this]() { bSidebar = !bSidebar; }, EButton::Ghost, TAttribute<bool>::CreateLambda([this]() { return bSidebar; }), true, 10)
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(FMargin(6.f, 0.f, 0.f, 0.f))
+			[
+				Button(LOCTEXT("Settings", "Settings"), [this]() { ShowMenu(true); if (Home.IsValid()) { Home->ShowSettings(); } }, EButton::Ghost, false, true, 10)
 			]
 		];
 }

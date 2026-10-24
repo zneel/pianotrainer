@@ -3,6 +3,7 @@
 #include "PianoKitLog.h"
 #include "PianoScore.h"
 #include "PianoDrills.h"
+#include "PianoVst3Plugin.h"
 
 #include "SfizzApi.h"
 
@@ -28,9 +29,16 @@ namespace PianoPlayerImpl
 {
 	static const FName SessionInputName(TEXT("Session"));
 
-	// Played when the Salamander samples are missing: a decaying sine per key (sfizz's built-in oscillator).
+	// Played when no piano samples are found: a decaying sine per key (sfizz's built-in oscillator).
 	static const char* FallbackSfz = "<region> sample=*sine ampeg_attack=0.003 ampeg_decay=1.5 ampeg_sustain=0 ampeg_release=0.3 amp_veltrack=100 volume=-12";
-	static const TCHAR* SalamanderCredit = TEXT("Piano: Salamander Grand Piano V3 by Alexander Holm (CC-BY 3.0), played by sfizz");
+	static const TCHAR* Piano162Credit = TEXT("Piano: Piano in 162 by Ivy Audio (Simon Dalzell), played by sfizz");
+
+	// What was chosen in a plug-in's window (its instrument, preset, settings), one file per plug-in.
+	static FString PluginStatePath(const FString& PluginPath)
+	{
+		return FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("PianoTrainer/PluginStates"),
+			FString::Printf(TEXT("%s_%08x.state"), *FPaths::GetBaseFilename(PluginPath), GetTypeHash(FPaths::ConvertRelativePathToFull(PluginPath))));
+	}
 
 	static bool Check(EMetaSoundBuilderResult Result, const TCHAR* What)
 	{
@@ -67,6 +75,8 @@ bool UPianoPlayer::BuildGraph(UWorld* World)
 {
 	using namespace PianoPlayerImpl;
 
+	InstrumentWorld = World;
+	FParse::Value(FCommandLine::Get(), TEXT("-instrument="), InstrumentPath); // -instrument=<sfz>: for tests
 	LoadInstrument(World);
 
 	UMetaSoundBuilderSubsystem& Builders = UMetaSoundBuilderSubsystem::GetChecked();
@@ -118,6 +128,15 @@ bool UPianoPlayer::BuildGraph(UWorld* World)
 		return false;
 	}
 
+	// render blocks the size of the device's buffer (MetaSound's default is 10 ms): live keys sound sooner, and the
+	// sampler's work is spread evenly over the callbacks instead of landing a double block on every other one. The
+	// console variable, since a source built at run time has no cooked quality settings in a packaged build.
+	IConsoleVariable* BlockRate = IConsoleManager::Get().FindConsoleVariable(TEXT("au.MetaSound.BlockRate"));
+	if (FAudioDeviceHandle Device = World->GetAudioDevice(); BlockRate && Device && Device->GetBufferLength() > 0)
+	{
+		BlockRate->Set(Device->GetSampleRate() / Device->GetBufferLength(), ECVF_SetByCode);
+	}
+
 	FMetaSoundBuilderOptions Options;
 	Options.Name = TEXT("PianoKitSource");
 	TScriptInterface<IMetaSoundDocumentInterface> Built = Builder->Build(GetTransientPackage(), Options);
@@ -141,6 +160,65 @@ bool UPianoPlayer::BuildGraph(UWorld* World)
 	return true;
 }
 
+TArray<FString> UPianoPlayer::GetInstrumentFolders()
+{
+	return { FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / TEXT("Instruments")),
+		FPaths::ConvertRelativePathToFull(FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("PianoTrainer/Instruments"))) };
+}
+
+TArray<FString> UPianoPlayer::FindInstruments()
+{
+	TArray<FString> Found;
+	for (const FString& Folder : GetInstrumentFolders())
+	{
+		TArray<FString> Files;
+		IFileManager::Get().FindFilesRecursive(Files, *Folder, TEXT("*.sfz"), true, false);
+		Found.Append(Files);
+	}
+	// Piano in 162 first
+	Found.StableSort([](const FString& A, const FString& B) { return A.Contains(TEXT("162")) && !B.Contains(TEXT("162")); });
+	return Found;
+}
+
+void UPianoPlayer::SetInstrumentPath(const FString& Path)
+{
+	InstrumentPath = Path;
+	if (InstrumentWorld)
+	{
+		LoadInstrument(InstrumentWorld); // before the player starts, it only remembers the path
+	}
+}
+
+void UPianoPlayer::SetSampleQuality(int32 Quality)
+{
+	SampleQuality = FMath::Clamp(Quality, 0, 10);
+	uint32 Version = 0;
+	if (const FPianoSession::FSynthPtr Synth = Session.IsValid() ? Session->GetSynth(Version) : nullptr)
+	{
+		Synth->SetQuality(SampleQuality);
+	}
+}
+
+void UPianoPlayer::SetInstrumentVolume(float Db)
+{
+	InstrumentVolumeDb = FMath::Clamp(Db, -40.f, 12.f);
+	uint32 Version = 0;
+	if (const FPianoSession::FSynthPtr Synth = Session.IsValid() ? Session->GetSynth(Version) : nullptr)
+	{
+		Synth->SetVolumeDb(InstrumentVolumeDb);
+	}
+}
+
+void UPianoPlayer::SetInstrumentControl(int32 Cc, float Value)
+{
+	InstrumentControls.Add(Cc, Value);
+	uint32 Version = 0;
+	if (const FPianoSession::FSynthPtr Synth = Session.IsValid() ? Session->GetSynth(Version) : nullptr)
+	{
+		Synth->SetControl(Cc, Value);
+	}
+}
+
 void UPianoPlayer::LoadInstrument(UWorld* World)
 {
 	float SampleRate = 48000.f;
@@ -153,15 +231,40 @@ void UPianoPlayer::LoadInstrument(UWorld* World)
 	}
 	int32 Voices = InstrumentVoices;
 	FParse::Value(FCommandLine::Get(), TEXT("-voices="), Voices); // -voices=N: voice limit for testing
-	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("PianoKit"));
-	const FString Path = FPaths::ConvertRelativePathToFull((Plugin ? Plugin->GetBaseDir() : FPaths::ProjectPluginsDir() / TEXT("PianoKit")) / InstrumentFile);
+	// the instrument set, else the first one found
+	const bool bPlugin = InstrumentPath.EndsWith(TEXT(".vst3"));
+	if (InstrumentPath.IsEmpty() || !(FPaths::FileExists(InstrumentPath) || (bPlugin && FPaths::DirectoryExists(InstrumentPath))))
+	{
+		const TArray<FString> Found = FindInstruments();
+		InstrumentPath = Found.Num() > 0 ? Found[0] : FString();
+	}
+	PluginError.Reset();
+	if (InstrumentPath.EndsWith(TEXT(".vst3")) && LoadPlugin(World, SampleRate))
+	{
+		return;
+	}
+	SavePluginState(); // leaving a plug-in for sfizz
+	// a plug-in that did not load: the first SFZ found plays instead (InstrumentPath stays the choice)
+	FString Path = InstrumentPath;
+	if (Path.EndsWith(TEXT(".vst3")))
+	{
+		const TArray<FString> Found = FindInstruments();
+		Path = Found.Num() > 0 ? Found[0] : FString();
+	}
+	const int32 Quality = SampleQuality;
+	const float VolumeDb = InstrumentVolumeDb;
+	const TMap<int32, float> Controls = InstrumentControls;
 
-	// sfizz parses the SFZ and preloads the start of every sample (the rest streams from disk while playing):
-	// ~2.5 s for the Salamander, so it runs in the background and the sound starts when it is done.
+	// sfizz parses the SFZ and preloads the start of every sample (the rest streams from disk while playing): seconds
+	// for a big library, so it runs in the background and the sound starts when it is done.
+	if (LoadTask.IsValid())
+	{
+		LoadTask.Wait(); // one load at a time
+	}
 	SoundLoad = MakeShared<FSoundLoad, ESPMode::ThreadSafe>();
 	const TSharedRef<FSoundLoad, ESPMode::ThreadSafe> Load = SoundLoad.ToSharedRef();
 	const TWeakPtr<FPianoSession, ESPMode::ThreadSafe> WeakSession = Session;
-	LoadTask = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Load, WeakSession, Path, SampleRate, Voices]()
+	LoadTask = UE::Tasks::Launch(UE_SOURCE_LOCATION, [Load, WeakSession, Path, SampleRate, Voices, Quality, VolumeDb, Controls]()
 	{
 		using namespace PianoPlayerImpl;
 		const FSfizzApi& Api = FSfizzApi::Get();
@@ -179,22 +282,129 @@ void UPianoPlayer::LoadInstrument(UWorld* World)
 		Api.set_sample_rate(Synth->Synth, SampleRate);
 		Api.set_samples_per_block(Synth->Synth, Synth->SamplesPerBlock);
 		Api.set_num_voices(Synth->Synth, FMath::Clamp(Voices, 1, 1024));
-		Api.set_volume(Synth->Synth, 0.f); // sfizz defaults to -7.35 dB of headroom; the Salamander peaks ~-6 dBFS at unity
-		const bool bSalamander = FPaths::FileExists(Path) && Api.load_file(Synth->Synth, TCHAR_TO_UTF8(*Path)) && Api.get_num_regions(Synth->Synth) > 0;
-		if (!bSalamander)
+		// applied by the node before it first renders (sfizz wants them on that thread)
+		Synth->SetQuality(Quality);
+		Synth->SetVolumeDb(VolumeDb); // sfizz defaults to -7.35 dB of headroom; 0 dB plays the samples as recorded
+		for (const TPair<int32, float>& Control : Controls)
 		{
-			UE_LOG(LogPianoKit, Warning, TEXT("Piano samples not found or not loadable at %s (run tools/fetch_salamander.py); using a plain tone"), *Path);
+			Synth->SetControl(Control.Key, Control.Value);
+		}
+		const bool bLoaded = !Path.IsEmpty() && FPaths::FileExists(Path) && Api.load_file(Synth->Synth, TCHAR_TO_UTF8(*Path)) && Api.get_num_regions(Synth->Synth) > 0;
+		if (!bLoaded)
+		{
+			UE_LOG(LogPianoKit, Warning, TEXT("No piano samples (%s); put Piano in 162 (SFZ) in %s, or choose an .sfz in Settings > Sound. Using a plain tone."),
+				Path.IsEmpty() ? TEXT("none found") : *Path, *UPianoPlayer::GetInstrumentFolders()[0]);
 			Api.load_string(Synth->Synth, "builtin.sfz", FallbackSfz);
 		}
 		UE_LOG(LogPianoKit, Log, TEXT("Instrument %s: %d regions, %d samples preloaded, %d voices, %.0f Hz, loaded in %.0f ms"),
-			bSalamander ? *Path : TEXT("(built-in tone)"), Api.get_num_regions(Synth->Synth), int32(Api.get_num_preloaded_samples(Synth->Synth)),
+			bLoaded ? *Path : TEXT("(built-in tone)"), Api.get_num_regions(Synth->Synth), int32(Api.get_num_preloaded_samples(Synth->Synth)),
 			Api.get_num_voices(Synth->Synth), SampleRate, (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 		if (const TSharedPtr<FPianoSession, ESPMode::ThreadSafe> Pinned = WeakSession.Pin())
 		{
 			Pinned->SetSynth(Synth);
 		}
-		Load->State.store(uint8(bSalamander ? ESoundState::Ready : ESoundState::Fallback));
+		Load->State.store(uint8(bLoaded ? ESoundState::Ready : ESoundState::Fallback));
 	});
+}
+
+bool UPianoPlayer::LoadPlugin(UWorld* World, float SampleRate)
+{
+	SavePluginState(); // the one playing keeps what was chosen in it
+	if (LoadTask.IsValid())
+	{
+		LoadTask.Wait();
+	}
+	// MetaSound renders a device buffer per block (BuildGraph); room for more
+	int32 MaxFrames = 1024;
+	if (FAudioDeviceHandle Device = World ? World->GetAudioDevice() : FAudioDeviceHandle())
+	{
+		MaxFrames = FMath::Max(MaxFrames, Device->GetBufferLength());
+	}
+	const double StartSeconds = FPlatformTime::Seconds();
+	const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Loaded = FPianoVst3Plugin::Load(InstrumentPath, SampleRate, MaxFrames, PluginError);
+	if (!Loaded)
+	{
+		return false;
+	}
+	TArray<uint8> State;
+	const FString StatePath = PianoPlayerImpl::PluginStatePath(InstrumentPath);
+	const bool bRestored = FFileHelper::LoadFileToArray(State, *StatePath, FILEREAD_Silent) && Loaded->SetState(State);
+	const TWeakObjectPtr<UPianoPlayer> WeakThis(this);
+	Loaded->OnEditorClosed = [WeakThis]()
+	{
+		if (const UPianoPlayer* Player = WeakThis.Get())
+		{
+			Player->SavePluginState();
+		}
+	};
+	const TSharedRef<FPianoSynth, ESPMode::ThreadSafe> Synth = MakeShared<FPianoSynth, ESPMode::ThreadSafe>();
+	Synth->Plugin = Loaded;
+	Synth->SampleRate = SampleRate;
+	Synth->SetVolumeDb(InstrumentVolumeDb);
+	for (const TPair<int32, float>& Control : InstrumentControls)
+	{
+		Synth->SetControl(Control.Key, Control.Value);
+	}
+	Plugin = Loaded;
+	if (Session.IsValid())
+	{
+		Session->SetSynth(Synth);
+	}
+	SoundLoad = MakeShared<FSoundLoad, ESPMode::ThreadSafe>();
+	SoundLoad->State.store(uint8(ESoundState::Ready));
+	UE_LOG(LogPianoKit, Log, TEXT("Instrument %s (VST 3): loaded in %.0f ms, %s"), *Loaded->GetName(), (FPlatformTime::Seconds() - StartSeconds) * 1000.0,
+		bRestored ? *FString::Printf(TEXT("restored from %s"), *StatePath) : TEXT("as it starts"));
+	return true;
+}
+
+void UPianoPlayer::SavePluginState() const
+{
+	TArray<uint8> State;
+	const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin();
+	if (Pinned && Pinned->GetState(State))
+	{
+		FFileHelper::SaveArrayToFile(State, *PianoPlayerImpl::PluginStatePath(Pinned->GetPath()));
+	}
+}
+
+TArray<FString> UPianoPlayer::FindPlugins()
+{
+	TArray<FString> Paths;
+	for (const FPianoVst3Plugin::FFound& Found : FPianoVst3Plugin::Find(GetInstrumentFolders()))
+	{
+		Paths.Add(Found.Path);
+	}
+	return Paths;
+}
+
+bool UPianoPlayer::IsPluginPlaying() const
+{
+	return Plugin.IsValid() && GetSoundState() == ESoundState::Ready;
+}
+
+bool UPianoPlayer::OpenInstrumentWindow(void* ParentWindowHandle)
+{
+	const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin();
+	return Pinned && Pinned->OpenEditor(ParentWindowHandle);
+}
+
+void UPianoPlayer::CloseInstrumentWindow()
+{
+	if (const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin())
+	{
+		Pinned->CloseEditor(); // its state is saved once it has closed (OnEditorClosed)
+	}
+}
+
+FString UPianoPlayer::GetPluginStateFile(const FString& PluginPath)
+{
+	return PianoPlayerImpl::PluginStatePath(PluginPath);
+}
+
+bool UPianoPlayer::IsInstrumentWindowOpen() const
+{
+	const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin();
+	return Pinned && Pinned->IsEditorOpen();
 }
 
 UPianoPlayer::ESoundState UPianoPlayer::GetSoundState() const
@@ -204,11 +414,26 @@ UPianoPlayer::ESoundState UPianoPlayer::GetSoundState() const
 
 FString UPianoPlayer::GetSoundCredit() const
 {
-	return GetSoundState() == ESoundState::Ready ? FString(PianoPlayerImpl::SalamanderCredit) : FString();
+	if (GetSoundState() != ESoundState::Ready)
+	{
+		return FString();
+	}
+	if (const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin())
+	{
+		return Pinned->GetVendor().IsEmpty() ? FString::Printf(TEXT("Piano: %s (VST 3 plug-in)"), *Pinned->GetName())
+			: FString::Printf(TEXT("Piano: %s by %s (VST 3 plug-in)"), *Pinned->GetName(), *Pinned->GetVendor());
+	}
+	return InstrumentPath.Contains(TEXT("162")) ? FString(PianoPlayerImpl::Piano162Credit)
+		: FString::Printf(TEXT("Piano: %s, played by sfizz"), *FPaths::GetBaseFilename(InstrumentPath));
 }
 
 void UPianoPlayer::Shutdown()
 {
+	SavePluginState();
+	if (const TSharedPtr<FPianoVst3Plugin, ESPMode::ThreadSafe> Pinned = Plugin.Pin())
+	{
+		Pinned->CloseEditor();
+	}
 	for (UMIDIDeviceInputController* Input : MidiInputs)
 	{
 		if (Input)
@@ -274,6 +499,7 @@ void UPianoPlayer::ScanMidiDevices()
 	}
 	MidiInputs.Reset();
 	MidiDeviceNames.Reset();
+	MidiActivitySeconds.Reset();
 	for (const FMIDIDeviceInfo& Info : Inputs)
 	{
 		if (UMIDIDeviceInputController* Input = UMIDIDeviceManager::CreateMIDIDeviceInputController(Info.DeviceID))
@@ -283,20 +509,37 @@ void UPianoPlayer::ScanMidiDevices()
 			Input->OnMIDIControlChange.AddDynamic(this, &UPianoPlayer::HandleMidiControlChange);
 			MidiInputs.Add(Input);
 			MidiDeviceNames.Add(Info.DeviceName);
+			MidiActivitySeconds.Add(0.0);
 			UE_LOG(LogPianoKit, Log, TEXT("MIDI input: %s"), *Info.DeviceName);
 		}
 	}
 }
 
-void UPianoPlayer::HandleMidiNoteOn(UMIDIDeviceInputController*, int32, int32, int32 Note, int32 Velocity)
+double UPianoPlayer::GetMidiDeviceIdleSeconds(int32 Device) const
 {
+	return MidiActivitySeconds.IsValidIndex(Device) && MidiActivitySeconds[Device] > 0.0 ? FPlatformTime::Seconds() - MidiActivitySeconds[Device] : 1e9;
+}
+
+void UPianoPlayer::RescanMidiDevices()
+{
+	MidiDeviceNames.Reset(); // forces the controllers to be made again
+	ScanMidiDevices();
+}
+
+void UPianoPlayer::HandleMidiNoteOn(UMIDIDeviceInputController* Controller, int32, int32, int32 Note, int32 Velocity)
+{
+	const int32 Device = MidiInputs.IndexOfByKey(Controller);
+	if (MidiActivitySeconds.IsValidIndex(Device))
+	{
+		MidiActivitySeconds[Device] = FPlatformTime::Seconds();
+	}
 	if (Velocity == 0)
 	{
 		NoteOff(Note); // running-status keyboards send note-on with velocity 0 as note-off
 	}
 	else
 	{
-		NoteOn(Note, Velocity);
+		NoteOn(Note, FMath::Clamp(FMath::RoundToInt32(127.f * FMath::Pow(Velocity / 127.f, VelocityCurve)), 1, 127));
 	}
 }
 
@@ -316,16 +559,26 @@ void UPianoPlayer::NoteOn(int32 Pitch, int32 Velocity)
 	Session->PushLive({ true, uint8(Pitch), uint8(FMath::Clamp(Velocity, 1, 127)) });
 }
 
-void UPianoPlayer::HandleMidiControlChange(UMIDIDeviceInputController*, int32, int32, int32 Type, int32 Value)
+void UPianoPlayer::HandleMidiControlChange(UMIDIDeviceInputController* Controller, int32, int32, int32 Type, int32 Value)
 {
+	const int32 Device = MidiInputs.IndexOfByKey(Controller);
+	if (MidiActivitySeconds.IsValidIndex(Device))
+	{
+		MidiActivitySeconds[Device] = FPlatformTime::Seconds();
+	}
 	if (Type == 64) // sustain (damper) pedal
 	{
-		SetSustainPedal(Value >= 64);
+		SetSustainPedal((Value >= 64) != bPedalInverted);
 	}
 }
 
-void UPianoPlayer::SetSustainPedal(bool bDown)
+void UPianoPlayer::SetSustainPedal(bool bDown, bool bFromPlayer)
 {
+	if (bFromPlayer && !bPlayerPedalUsed)
+	{
+		bPlayerPedalUsed = true; // from now on their pedal, not the score's
+		UpdateScorePedal();
+	}
 	if (!Session.IsValid() || bDown == bPedal)
 	{
 		return;
@@ -425,17 +678,25 @@ void UPianoPlayer::ApplyScore(const TSharedPtr<FPianoScore>& NewScore)
 	Drill = EPianoDrill::AsWritten;
 	ClearLoop();
 	RebuildPlayNotes();
+	Session->SetPedals(TArray<FVector2D>(Score->GetMarks().Pedals));
+	UpdateScorePedal();
 	ResetFeedback();
 	Session->PushSeek(0.0);
 	LogLine(TEXT("load"), INDEX_NONE, Score->GetNotes().Num(), 0.0, 0.f);
 	if (Log)
 	{
 		// the note list the sequencer plays, for offline analysis
-		FString Csv = TEXT("index,on_ms,off_ms,pitch,hand,tied,grace\n");
+		FString Csv = TEXT("index,on_ms,off_ms,pitch,hand,tied,grace,velocity\n");
 		for (const FPianoSessionNote& N : PlayNotes)
 		{
-			Csv += FString::Printf(TEXT("%d,%.1f,%.1f,%d,%d,%d,%d\n"), N.SourceIndex, N.OnMs, N.OffMs, N.Pitch, int32(N.Hand), N.bTied ? 1 : 0, N.bGrace ? 1 : 0);
+			Csv += FString::Printf(TEXT("%d,%.1f,%.1f,%d,%d,%d,%d,%d\n"), N.SourceIndex, N.OnMs, N.OffMs, N.Pitch, int32(N.Hand), N.bTied ? 1 : 0, N.bGrace ? 1 : 0, N.Velocity);
 		}
+		FString Pedals = TEXT("ms,down\n");
+		for (const FVector2D& Mark : Score->GetMarks().Pedals)
+		{
+			Pedals += FString::Printf(TEXT("%.1f,%d\n"), Mark.X, int32(Mark.Y));
+		}
+		FFileHelper::SaveStringToFile(Pedals, *(FPaths::ProjectSavedDir() / TEXT("PianoLogs/pedals.csv")));
 		FFileHelper::SaveStringToFile(Csv, *(FPaths::ProjectSavedDir() / TEXT("PianoLogs/notes.csv")));
 	}
 }
@@ -446,7 +707,7 @@ void UPianoPlayer::RebuildPlayNotes()
 	{
 		return;
 	}
-	PlayNotes = FPianoDrills::Apply(Drill, Score->MakeSessionNotes(), Score->GetBeatTimes(), GetHands());
+	PlayNotes = FPianoDrills::Apply(Drill, Score->MakeSessionNotes(bExpressive), Score->GetBeatTimes(), GetHands());
 	Session->SetNotes(TArray<FPianoSessionNote>(PlayNotes));
 }
 
@@ -699,7 +960,41 @@ void UPianoPlayer::SetHands(EPianoHand Hands)
 EPianoHand UPianoPlayer::GetHands() const { return Session ? EPianoHand(Session->UserHands.load()) : EPianoHand::Both; }
 void UPianoPlayer::SetTempoScale(float Scale) { if (Session) Session->TempoScale.store(FMath::Clamp(Scale, 0.1f, 2.f)); }
 float UPianoPlayer::GetTempoScale() const { return Session ? Session->TempoScale.load() : 1.f; }
-void UPianoPlayer::SetListenMode(bool bEnabled) { if (Session) Session->bPlayUserHands.store(bEnabled); }
+void UPianoPlayer::SetListenMode(bool bEnabled) { if (Session) { Session->bPlayUserHands.store(bEnabled); UpdateScorePedal(); } }
+
+void UPianoPlayer::SetExpressive(bool bEnabled)
+{
+	if (bEnabled == bExpressive)
+	{
+		return;
+	}
+	bExpressive = bEnabled;
+	if (Score.IsValid())
+	{
+		const double Now = GetSongMs();
+		RebuildPlayNotes();
+		Seek(Now);
+	}
+}
+
+void UPianoPlayer::SetScorePedal(bool bEnabled)
+{
+	bScorePedalSetting = bEnabled;
+	UpdateScorePedal();
+}
+
+bool UPianoPlayer::IsScorePedalActive() const
+{
+	return Session && Session->bScorePedal.load();
+}
+
+void UPianoPlayer::UpdateScorePedal()
+{
+	if (Session)
+	{
+		Session->bScorePedal.store(bScorePedalSetting && (GetListenMode() || !bPlayerPedalUsed));
+	}
+}
 bool UPianoPlayer::GetListenMode() const { return Session && Session->bPlayUserHands.load(); }
 void UPianoPlayer::SetEchoLiveKeys(bool bEnabled) { if (Session) Session->bEchoLive.store(bEnabled); }
 bool UPianoPlayer::GetEchoLiveKeys() const { return Session && Session->bEchoLive.load(); }
@@ -932,11 +1227,11 @@ void UPianoPlayer::Tick(float DeltaTime)
 			const double Downbeat = Measures[AutoPedalMeasure].OnMs;
 			if (bPedal && Now >= Downbeat + 20.0 && Now < Downbeat + 100.0)
 			{
-				SetSustainPedal(false);
+				SetSustainPedal(false, false);
 			}
 			else if (Now >= Downbeat + 100.0)
 			{
-				SetSustainPedal(true);
+				SetSustainPedal(true, false);
 				++AutoPedalMeasure;
 			}
 		}
