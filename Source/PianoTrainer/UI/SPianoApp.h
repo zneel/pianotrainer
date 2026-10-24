@@ -15,6 +15,7 @@
 class FPianoCoach;
 class SPianoHome;
 class SPianoKeyboard;
+class SPianoRuler;
 class SSheetStrip;
 class UPianoPlayer;
 
@@ -44,6 +45,7 @@ public:
 	const FPianoViewSettings& GetSettings() const { return Settings; }
 	bool IsMenuShown() const { return bMenu; }
 	FPianoCoach* GetCoach() const { return Coach.Get(); }
+	TSharedPtr<SPianoRuler> GetRuler() const { return Ruler; }
 	void ShowMenu(bool bShow);
 
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
@@ -84,6 +86,7 @@ private:
 	TSharedPtr<SPianoHome> Home;
 	TSharedPtr<SSheetStrip> Sheet;
 	TSharedPtr<SPianoKeyboard> Keyboard;
+	TSharedPtr<SPianoRuler> Ruler;
 	TSharedPtr<SWidget> Stage;
 	SVerticalBox::FSlot* StageSlot = nullptr;
 	bool bStageFills = true;

@@ -19,6 +19,7 @@ public class PianoTrainer : ModuleRules
 			"PianoKit",
 			"AudioMixer",
 			"ProceduralMeshComponent",
+			"Json", // test reports
 		});
 
 		if (Target.Platform == UnrealTargetPlatform.Win64)

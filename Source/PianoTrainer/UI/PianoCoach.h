@@ -68,6 +68,13 @@ public:
 	void Stop();
 	void Split();          // cut the session's (single) section in half and start again on the first half
 	void StartGroups();    // repeated note-groups inside the session
+	// Plan edits (from the ruler; a running session ends first): move the edge after section Left to Beat (onto a
+	// neighbour edge: the two merge), split the section holding Beat there, merge Left with the next; cut the whole
+	// plan again at phrases (sections that stay the same keep their progress).
+	bool MoveSectionEdge(int32 Left, int32 Beat);
+	bool SplitSectionAt(int32 Beat);
+	bool MergeSections(int32 Left);
+	bool Recut();
 	void SetTempo(float Tempo);
 	void Tick(float DeltaSeconds);
 
@@ -105,6 +112,7 @@ private:
 	void PlayHands(EPianoHand Hands); // switch the practised hands and start the section again after a bar of clicks
 	int32 CountNotes(EPianoHand InHand) const;
 	FString PieceKey() const;
+	bool EditPlan(TFunctionRef<bool(FPianoPlan&, const FPianoScore&)> Edit);
 	FPianoPlan* SessionPlan(); // the plan of the piece the session is on (the player may have moved on)
 
 	UPianoPlayer* Player = nullptr;

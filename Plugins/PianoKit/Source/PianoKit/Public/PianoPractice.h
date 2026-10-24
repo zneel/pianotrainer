@@ -1,6 +1,8 @@
 // Practice plans after Bernhard's method (Piano Street forum, 2003-08):
-//  - a piece is learned in small sections (two bars, one where it is dense), each practised with the first beat of the
-//    next bar so the sections join up;
+//  - a piece is learned in sections cut where its phrases begin (FPianoPhrases: rests, long notes, slurs, fermatas,
+//    double bars and repeats, cadences, passages that come back), about two to eight bars, smaller where it is dense;
+//    each is practised with the first beat of what follows so the sections join up. A passage that comes back note
+//    for note is learned once (the copy follows the original). The sections can be moved, split and merged;
 //  - the hardest section first (when one is clearly harder: it takes longest), then new sections and joins
 //    alternate: 1, 2, 1-2, 3, 1-3, ... (here a join spans at most four sections);
 //  - each day starts by reviewing what was learned before (played cold) before anything new;
@@ -32,7 +34,8 @@ struct FPianoSection
 	int32 Sessions = 0;
 	int32 Relearns = 0;   // times relearned after a month away (towards omniscience)
 	float BestTempo = 0.f; // fastest clean tempo (1 = written)
-	float Difficulty = 0.f; // notes per second in its densest bar
+	float Difficulty = 0.f; // distinct onsets per second
+	int32 RepeatOf = INDEX_NONE; // an earlier section with the same notes: learned with it, not on its own
 	FString Label;         // "m. 3–4", for lists that have no score at hand
 };
 
@@ -51,7 +54,7 @@ struct PIANOKIT_API FPianoPlan
 	int32 NextSession = 0;
 	TArray<FPianoSection> Sections;
 
-	// Two-bar sections, one bar where the music is dense (top quarter of notes per second).
+	// Sections cut at phrase boundaries (FPianoPhrases::Segment).
 	static FPianoPlan Make(const FPianoScore& Score, const FString& Piece, const FString& Title);
 	// The hardest section first (if any), then 1, 2, 1-2, 3, 1-3 (up to four sections per join), ...
 	TArray<FPianoPlanSession> Schedule() const;
@@ -59,8 +62,22 @@ struct PIANOKIT_API FPianoPlan
 	int32 Hardest() const;
 	// A section learned on an earlier day and not played today: review it before new work. INDEX_NONE if none.
 	int32 DueReview(const FString& Today) const;
-	// Bernhard: "not learned in seven repetitions? Cut it in half." Down to a single beat.
-	bool Split(int32 Section);
+	// Bernhard: "not learned in seven repetitions? Cut it in half." At the strongest phrase start near the middle,
+	// down to a single beat.
+	bool Split(int32 Section, const FPianoScore& Score);
+	// Edits (sections whose notes change start again as new; call Refresh afterwards):
+	// the edge after section Left moves to Beat - onto an outer edge, the two sections merge;
+	bool MoveEdge(int32 Left, int32 Beat);
+	// the section holding Beat is cut there;
+	bool SplitAt(int32 Beat);
+	// section Left and the next become one.
+	bool Merge(int32 Left);
+	// Sections with exactly the same beats as in Old keep their progress (after making the plan again).
+	void AdoptProgress(const FPianoPlan& Old);
+	// Labels, difficulty, and which sections repeat earlier ones.
+	void Refresh(const FPianoScore& Score);
+	// Copies of a section follow its progress.
+	void SyncRepeats();
 	// Song time of a session: start, end, and end with the overlap (the first beat after it).
 	void GetTimes(const FPianoScore& Score, const FPianoPlanSession& Session, double& OutStartMs, double& OutEndMs, double& OutOverlapEndMs) const;
 	FString Describe(const FPianoScore& Score, const FPianoPlanSession& Session) const;

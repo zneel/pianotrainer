@@ -28,6 +28,23 @@ struct FPianoScoreMeasure
 	double OnMs = 0.0;
 	double QStamp = 0.0; // start in quarter notes from the beginning of the piece
 	float X = 0.f;      // left edge in SVG pixels
+	// bar lines: at its end a double bar, the final bar, the end of a repeat; at its start the start of a repeat
+	bool bDoubleBarEnd = false, bFinalEnd = false, bRepeatEnd = false, bRepeatStart = false;
+};
+
+// A slur (or phrase mark) from the onset of its first note to the onset of its last; EndOffMs is when that note ends.
+struct FPianoScoreSlur
+{
+	double StartMs = 0.0, EndMs = 0.0, EndOffMs = 0.0;
+	int32 Staff = 1;
+};
+
+// What the notation says about phrasing, read from Verovio's MEI.
+struct FPianoScoreMarks
+{
+	TArray<FPianoScoreSlur> Slurs;
+	TArray<FVector2D> Fermatas; // onset and end (ms) of each note or chord with a fermata
+	int32 KeyFifths = 0;        // the first key signature: sharps > 0, flats < 0
 };
 
 class PIANOKIT_API FPianoScore
@@ -43,6 +60,7 @@ public:
 	const FString& GetSourcePath() const { return SourcePath; }
 	const TArray<FPianoScoreNote>& GetNotes() const { return Notes; }
 	const TArray<FPianoScoreMeasure>& GetMeasures() const { return Measures; }
+	const FPianoScoreMarks& GetMarks() const { return Marks; }
 	FVector2f GetSize() const { return Size; }
 	double GetLengthMs() const { return LengthMs; }
 	int32 GetNumStaves() const { return NumStaves; }
@@ -74,6 +92,7 @@ private:
 	FString SourcePath;
 	TArray<FPianoScoreNote> Notes;
 	TArray<FPianoScoreMeasure> Measures;
+	FPianoScoreMarks Marks;
 	FVector2f Size = FVector2f::ZeroVector;
 	double LengthMs = 0.0;
 	int32 NumStaves = 0;

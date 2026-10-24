@@ -5,8 +5,10 @@
 #include "PianoPlayer.h"
 #include "PianoScore.h"
 #include "PianoLibrary.h"
+#include "PianoPhrases.h"
 #include "UI/PianoCoach.h"
 #include "UI/SPianoApp.h"
+#include "UI/SPianoRuler.h"
 #include "Piano3D/PianoKeyboard3D.h"
 #include "Piano3D/PianoNoteHighway.h"
 
@@ -23,6 +25,9 @@
 #include "Algo/Accumulate.h"
 #include "Algo/Count.h"
 #include "UnrealClient.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPianoTrainer, Log, All);
 
@@ -124,6 +129,7 @@ void APianoTrainerGameMode::BeginPlay()
 
 	FParse::Value(Cmd, TEXT("-shot="), ShotAtMs);
 	FParse::Value(Cmd, TEXT("-uishot="), UiShotSeconds); // screenshot after N seconds (Saved/PianoLogs/ui.png) and quit
+	FParse::Value(Cmd, TEXT("-plantest="), PlanTestMode);
 	FString DrillName;
 	if (FParse::Value(Cmd, TEXT("-drill="), DrillName))
 	{
@@ -208,6 +214,10 @@ void APianoTrainerGameMode::Tick(float DeltaSeconds)
 	{
 		ExitAtSeconds = 0.0;
 		FPlatformMisc::RequestExit(false, TEXT("PianoTrainer autotest"));
+	}
+	if (!PlanTestMode.IsEmpty() && Player)
+	{
+		TickPlanTest();
 	}
 	if (!bAutotest || !Player)
 	{
@@ -355,6 +365,159 @@ void APianoTrainerGameMode::TickCoachTest()
 	else if (FPlatformTime::Seconds() - AutotestStartSeconds > 600.0)
 	{
 		WriteAutotestReport(TEXT("timeout"));
+	}
+}
+
+void APianoTrainerGameMode::TickPlanTest()
+{
+	FPianoCoach* Coach = App.IsValid() ? App->GetCoach() : nullptr;
+	const TSharedPtr<SPianoRuler> Ruler = App.IsValid() ? App->GetRuler() : nullptr;
+	const TSharedPtr<FPianoScore> Score = Player->GetScore();
+	if (++PlanTestFrame < PlanTestNextFrame || !Coach || !Ruler.IsValid() || !Score.IsValid())
+	{
+		return;
+	}
+	static const TCHAR* StageNames[] = { TEXT("new"), TEXT("learned"), TEXT("mastered"), TEXT("omniscient") };
+	if (!PlanTestResult.IsValid())
+	{
+		PlanTestResult = MakeShared<FJsonObject>();
+	}
+	// the plan as it is now: one entry per section
+	auto Record = [&](const TCHAR* Step)
+	{
+		TArray<TSharedPtr<FJsonValue>> List;
+		if (const FPianoPlan* Plan = Coach->GetPlan())
+		{
+			for (const FPianoSection& S : Plan->Sections)
+			{
+				TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+				O->SetStringField(TEXT("label"), S.Label);
+				O->SetNumberField(TEXT("first"), S.FirstBeat);
+				O->SetNumberField(TEXT("end"), S.EndBeat);
+				O->SetNumberField(TEXT("repeatOf"), S.RepeatOf);
+				O->SetStringField(TEXT("stage"), StageNames[uint8(S.Stage) & 3]);
+				List.Add(MakeShared<FJsonValueObject>(O));
+			}
+		}
+		PlanTestResult->SetArrayField(Step, List);
+		UE_LOG(LogPianoTrainer, Log, TEXT("Plan test: %s, %d sections"), Step, List.Num());
+	};
+	auto Finish = [&]()
+	{
+		// the phrase cues the plan was cut from (beats scoring at least 1)
+		const FPianoPhrases Phrases = FPianoPhrases::Analyse(*Score);
+		TArray<TSharedPtr<FJsonValue>> Cues;
+		for (int32 B = 1; B < Phrases.NumBeats; ++B)
+		{
+			if (Phrases.Strength[B] >= 1.f)
+			{
+				TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
+				const int32 Measure = Score->GetMeasureAt(Phrases.BeatMs[B] + 1.0);
+				O->SetNumberField(TEXT("beat"), B);
+				O->SetStringField(TEXT("at"), FString::Printf(TEXT("%d.%d"), Measure + 1, B - Phrases.NearestBeat(Score->GetMeasureStartMs(Measure)) + 1));
+				O->SetNumberField(TEXT("strength"), FMath::RoundToInt32(Phrases.Strength[B] * 10.f) / 10.0);
+				O->SetStringField(TEXT("why"), Phrases.Why[B]);
+				Cues.Add(MakeShared<FJsonValueObject>(O));
+			}
+		}
+		PlanTestResult->SetArrayField(TEXT("cues"), Cues);
+		TArray<TSharedPtr<FJsonValue>> Slurs;
+		auto At = [&](double Ms)
+		{
+			const int32 B = Phrases.BeatAt(Ms), Measure = Score->GetMeasureAt(Phrases.BeatMs[B] + 1.0);
+			return FString::Printf(TEXT("%d.%d"), Measure + 1, B - Phrases.NearestBeat(Score->GetMeasureStartMs(Measure)) + 1);
+		};
+		for (const FPianoScoreSlur& Slur : Score->GetMarks().Slurs)
+		{
+			Slurs.Add(MakeShared<FJsonValueString>(FString::Printf(TEXT("%s-%s (%d beats, staff %d)"), *At(Slur.StartMs), *At(Slur.EndMs),
+				Phrases.BeatAt(Slur.EndMs) - Phrases.BeatAt(Slur.StartMs), Slur.Staff)));
+		}
+		PlanTestResult->SetArrayField(TEXT("slurList"), Slurs);
+		PlanTestResult->SetStringField(TEXT("score"), Score->GetTitle());
+		PlanTestResult->SetNumberField(TEXT("beats"), Phrases.NumBeats);
+		PlanTestResult->SetNumberField(TEXT("slurs"), Score->GetMarks().Slurs.Num());
+		PlanTestResult->SetNumberField(TEXT("fermatas"), Score->GetMarks().Fermatas.Num());
+		FString Text;
+		FJsonSerializer::Serialize(PlanTestResult.ToSharedRef(), TJsonWriterFactory<>::Create(&Text));
+		const FString Path = FPaths::ProjectSavedDir() / TEXT("PianoLogs/plantest.json");
+		FFileHelper::SaveStringToFile(Text, *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		UE_LOG(LogPianoTrainer, Log, TEXT("Plan test -> %s"), *FPaths::ConvertRelativePathToFull(Path));
+		PlanTestMode.Reset();
+		ExitAtSeconds = FPlatformTime::Seconds() + 1.0;
+	};
+
+	// real mouse input, routed by Slate to whatever is under the pointer (the ruler's plan strip)
+	FSlateApplication& Slate = FSlateApplication::Get();
+	auto Pointer = [](const FVector2D& At, bool bHeld, FKey Button)
+	{
+		TSet<FKey> Pressed;
+		if (bHeld)
+		{
+			Pressed.Add(EKeys::LeftMouseButton);
+		}
+		return FPointerEvent(0, 0, At, At, Pressed, Button, 0.f, FModifierKeysState());
+	};
+	auto DragFromTo = [&](const FVector2D& From, const FVector2D& To)
+	{
+		Slate.ProcessMouseMoveEvent(Pointer(From, false, EKeys::Invalid));
+		const bool bDown = Slate.ProcessMouseButtonDownEvent(nullptr, Pointer(From, true, EKeys::LeftMouseButton));
+		Slate.ProcessMouseMoveEvent(Pointer(FMath::Lerp(From, To, 0.5), true, EKeys::Invalid));
+		Slate.ProcessMouseMoveEvent(Pointer(To, true, EKeys::Invalid));
+		const bool bUp = Slate.ProcessMouseButtonUpEvent(Pointer(To, false, EKeys::LeftMouseButton));
+		const FGeometry& G = Ruler->GetTickSpaceGeometry();
+		UE_LOG(LogPianoTrainer, Log, TEXT("Plan test drag (%.0f,%.0f) -> (%.0f,%.0f): down %d up %d; ruler at (%.0f,%.0f) size (%.0f,%.0f) scale %.2f"),
+			From.X, From.Y, To.X, To.Y, bDown, bUp, G.GetAbsolutePosition().X, G.GetAbsolutePosition().Y, G.GetAbsoluteSize().X, G.GetAbsoluteSize().Y, G.Scale);
+	};
+	const FPianoPhrases Phrases = FPianoPhrases::Analyse(*Score);
+	auto BarBeat = [&](int32 Bar) { return Phrases.NearestBeat(Score->GetMeasureStartMs(Bar - 1)); }; // bar 1 = the first
+
+	switch (PlanTestStep++)
+	{
+	case 0:
+		if (!Coach->GetPlan())
+		{
+			Coach->MakePlan(Score->GetTitle());
+		}
+		Record(TEXT("made"));
+		if (PlanTestMode != TEXT("edit"))
+		{
+			Finish();
+		}
+		PlanTestNextFrame = PlanTestFrame + 6; // the ruler grows its plan strip
+		break;
+	case 1:
+		// drag the edge after the first section to the start of bar 4
+		DragFromTo(Ruler->GetPlanBeatScreenPosition(Coach->GetPlan()->Sections[1].FirstBeat), Ruler->GetPlanBeatScreenPosition(BarBeat(4)));
+		Record(TEXT("moved"));
+		PlanTestNextFrame = PlanTestFrame + 3;
+		break;
+	case 2:
+	{
+		// double-click at bar 11: that section splits there
+		const FVector2D At = Ruler->GetPlanBeatScreenPosition(BarBeat(11));
+		Slate.ProcessMouseMoveEvent(Pointer(At, false, EKeys::Invalid));
+		Slate.ProcessMouseButtonDownEvent(nullptr, Pointer(At, true, EKeys::LeftMouseButton));
+		Slate.ProcessMouseButtonUpEvent(Pointer(At, false, EKeys::LeftMouseButton));
+		Slate.ProcessMouseButtonDoubleClickEvent(nullptr, Pointer(At, true, EKeys::LeftMouseButton));
+		Slate.ProcessMouseButtonUpEvent(Pointer(At, false, EKeys::LeftMouseButton));
+		Record(TEXT("split"));
+		PlanTestNextFrame = PlanTestFrame + 3;
+		break;
+	}
+	case 3:
+		// drag that new edge onto the start of its section: the two merge again
+		DragFromTo(Ruler->GetPlanBeatScreenPosition(BarBeat(11)), Ruler->GetPlanBeatScreenPosition(BarBeat(9)));
+		Record(TEXT("merged"));
+		PlanTestNextFrame = PlanTestFrame + 3;
+		break;
+	default:
+		// the seven-times test failed on the last section: cut it in half
+		Coach->StartSection(Coach->GetPlan()->Sections.Num() - 1);
+		Coach->Split();
+		Record(TEXT("halved"));
+		Coach->Stop();
+		Finish();
+		break;
 	}
 }
 

@@ -508,7 +508,8 @@ bool FPianoScore::LoadFile(const FString& InPath, FString& OutError)
 	Size = FVector2f(Document->width(), Document->height());
 
 	// Timing: the timemap lists which notes start at each moment, MIDI values give pitch and duration.
-	TSharedPtr<FJsonValue> TimemapValue = ParseJson(Vrv.renderToTimemap(Tk, R"({"includeMeasures": true})"));
+	TSharedPtr<FJsonValue> TimemapValue = ParseJson(Vrv.renderToTimemap(Tk, R"({"includeMeasures": true, "includeRests": true})"));
+	TMap<FString, double> RestTimes; // rest id -> onset (a fermata may sit on a rest)
 	if (!TimemapValue.IsValid() || TimemapValue->Type != EJson::Array)
 	{
 		OutError = TEXT("Verovio returned no timemap");
@@ -538,6 +539,14 @@ bool FPianoScore::LoadFile(const FString& InPath, FString& OutError)
 			}
 		}
 
+		const TArray<TSharedPtr<FJsonValue>>* RestIds = nullptr;
+		if (Entry->TryGetArrayField(TEXT("restsOn"), RestIds))
+		{
+			for (const TSharedPtr<FJsonValue>& IdValue : *RestIds)
+			{
+				RestTimes.Add(IdValue->AsString(), TimeMs);
+			}
+		}
 		const TArray<TSharedPtr<FJsonValue>>* OnIds = nullptr;
 		if (!Entry->TryGetArrayField(TEXT("on"), OnIds))
 		{
@@ -695,6 +704,122 @@ bool FPianoScore::LoadFile(const FString& InPath, FString& OutError)
 		{
 			UE_LOG(LogPianoKit, Log, TEXT("  %d grace notes (wait mode won't hold for them)"), Graces);
 		}
+
+		// Phrasing: slurs and phrase marks, fermatas, bar lines and the key (practice sections are cut at phrases).
+		auto ForEachTag = [&Mei](const TCHAR* Open, TFunctionRef<void(int32 Pos, const FString& Tag)> Fn)
+		{
+			const int32 OpenLen = FCString::Strlen(Open);
+			for (int32 Pos = Mei.Find(Open, ESearchCase::CaseSensitive); Pos != INDEX_NONE; Pos = Mei.Find(Open, ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos + OpenLen))
+			{
+				const int32 TagEnd = Mei.Find(TEXT(">"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos);
+				if (TagEnd == INDEX_NONE)
+				{
+					break;
+				}
+				Fn(Pos, Mei.Mid(Pos, TagEnd - Pos));
+			}
+		};
+		// slurs and fermatas often point at a chord: its first note stands for it
+		TMap<FString, int32> FirstNoteOfChord;
+		ForEachTag(TEXT("<chord "), [&](int32 Pos, const FString& Tag)
+		{
+			const int32 NotePos = Mei.Find(TEXT("<note "), ESearchCase::CaseSensitive, ESearchDir::FromStart, Pos + Tag.Len());
+			const int32 NoteEnd = NotePos == INDEX_NONE ? INDEX_NONE : Mei.Find(TEXT(">"), ESearchCase::CaseSensitive, ESearchDir::FromStart, NotePos);
+			if (NoteEnd != INDEX_NONE)
+			{
+				if (const int32* Index = IndexById.Find(AttrValue(Mei.Mid(NotePos, NoteEnd - NotePos), TEXT("xml:id"))))
+				{
+					FirstNoteOfChord.Add(AttrValue(Tag, TEXT("xml:id")), *Index);
+				}
+			}
+		});
+		auto NoteOf = [&](const FString& Id) -> const FPianoScoreNote*
+		{
+			const int32* Index = IndexById.Find(Id);
+			Index = Index ? Index : FirstNoteOfChord.Find(Id);
+			return Index ? &Notes[*Index] : nullptr;
+		};
+		Marks = FPianoScoreMarks();
+		for (const TCHAR* Open : { TEXT("<slur "), TEXT("<phrase ") })
+		{
+			ForEachTag(Open, [&](int32, const FString& Tag)
+			{
+				const FPianoScoreNote* First = NoteOf(AttrValue(Tag, TEXT("startid")));
+				const FPianoScoreNote* Last = NoteOf(AttrValue(Tag, TEXT("endid")));
+				if (First && Last && Last->OnMs >= First->OnMs)
+				{
+					const FString StaffText = AttrValue(Tag, TEXT("staff"));
+					Marks.Slurs.Add({ First->OnMs, Last->OnMs, Last->OnMs + Last->DurMs, StaffText.IsEmpty() ? First->Staff : FCString::Atoi(*StaffText) });
+				}
+			});
+		}
+		ForEachTag(TEXT("<fermata "), [&](int32, const FString& Tag)
+		{
+			const FString Id = AttrValue(Tag, TEXT("startid"));
+			if (const FPianoScoreNote* N = NoteOf(Id))
+			{
+				Marks.Fermatas.Add(FVector2D(N->OnMs, N->OnMs + N->DurMs));
+			}
+			else if (const double* RestMs = RestTimes.Find(Id))
+			{
+				Marks.Fermatas.Add(FVector2D(*RestMs, *RestMs));
+			}
+		});
+		for (const TCHAR* Open : { TEXT("<note "), TEXT("<chord "), TEXT("<rest ") })
+		{
+			ForEachTag(Open, [&](int32, const FString& Tag)
+			{
+				if (!Tag.Contains(TEXT(" fermata=\"")))
+				{
+					return;
+				}
+				const FString Id = AttrValue(Tag, TEXT("xml:id"));
+				if (const FPianoScoreNote* N = NoteOf(Id))
+				{
+					Marks.Fermatas.Add(FVector2D(N->OnMs, N->OnMs + N->DurMs));
+				}
+				else if (const double* RestMs = RestTimes.Find(Id))
+				{
+					Marks.Fermatas.Add(FVector2D(*RestMs, *RestMs));
+				}
+			});
+		}
+		TMap<FString, int32> MeasureById;
+		for (int32 Index = 0; Index < Measures.Num(); ++Index)
+		{
+			MeasureById.Add(Measures[Index].Id, Index);
+		}
+		ForEachTag(TEXT("<measure "), [&](int32, const FString& Tag)
+		{
+			const int32* Index = MeasureById.Find(AttrValue(Tag, TEXT("xml:id")));
+			if (!Index)
+			{
+				return;
+			}
+			FPianoScoreMeasure& M = Measures[*Index];
+			const FString Right = AttrValue(Tag, TEXT("right")), Left = AttrValue(Tag, TEXT("left"));
+			M.bDoubleBarEnd = Right.StartsWith(TEXT("dbl"));
+			M.bFinalEnd = Right == TEXT("end");
+			M.bRepeatEnd = Right == TEXT("rptend") || Right == TEXT("rptboth");
+			M.bRepeatStart = Left == TEXT("rptstart") || Left == TEXT("rptboth");
+			if (Right == TEXT("rptboth") && Measures.IsValidIndex(*Index + 1))
+			{
+				Measures[*Index + 1].bRepeatStart = true;
+			}
+		});
+		// key: <keySig sig="3f"/> or key.sig="2s" on a score or staff definition
+		for (const TCHAR* Key : { TEXT(" sig=\""), TEXT(" key.sig=\"") })
+		{
+			const int32 At = Mei.Find(Key, ESearchCase::CaseSensitive);
+			if (At != INDEX_NONE)
+			{
+				const int32 ValueStart = At + FCString::Strlen(Key);
+				const FString Sig = Mei.Mid(ValueStart, Mei.Find(TEXT("\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, ValueStart) - ValueStart);
+				Marks.KeyFifths = FCString::Atoi(*Sig) * (Sig.EndsWith(TEXT("f")) ? -1 : 1);
+				break;
+			}
+		}
+		UE_LOG(LogPianoKit, Log, TEXT("  phrasing: %d slurs, %d fermatas, key %+d"), Marks.Slurs.Num(), Marks.Fermatas.Num(), Marks.KeyFifths);
 	}
 
 	BuildScrollMap();

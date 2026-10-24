@@ -5,6 +5,7 @@
 #include "PianoPlayer.h"
 #include "PianoScore.h"
 
+#include "Algo/BinarySearch.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Engine/Texture2D.h"
 #include "Rendering/DrawElements.h"
@@ -119,12 +120,32 @@ int32 SSheetStrip::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 		}
 	}
 
-	// A-B loop region.
+	// A-B loop region. Its edges sit in the gap between notes - halfway from the last notehead before to the first one
+	// at the edge - so no note is cut in two (song time maps onto the notehead itself).
 	double LoopStart = 0.0, LoopEnd = 0.0;
 	if (P->GetLoop(LoopStart, LoopEnd))
 	{
-		const float X0 = FMath::Clamp(OffsetX + Score->TimeToX(LoopStart) * Scale, 0.f, Size.X);
-		const float X1 = FMath::Clamp(OffsetX + Score->TimeToX(LoopEnd) * Scale, 0.f, Size.X);
+		const TArray<FPianoScoreNote>& AllNotes = Score->GetNotes();
+		auto GapBefore = [&](double Ms)
+		{
+			const int32 At = Algo::LowerBoundBy(AllNotes, Ms - 2.0, &FPianoScoreNote::OnMs);
+			float Left = Score->TimeToX(Ms), Right = -TNumericLimits<float>::Max();
+			for (int32 I = At; I < AllNotes.Num() && AllNotes[I].OnMs <= Ms + 2.0; ++I)
+			{
+				Left = AllNotes[I].Head.bIsValid ? FMath::Min(Left, AllNotes[I].Head.Min.X) : Left;
+			}
+			if (At > 0)
+			{
+				const double Before = AllNotes[At - 1].OnMs;
+				for (int32 I = At - 1; I >= 0 && AllNotes[I].OnMs >= Before - 2.0; --I)
+				{
+					Right = AllNotes[I].Head.bIsValid ? FMath::Max(Right, AllNotes[I].Head.Max.X) : FMath::Max(Right, Score->TimeToX(Before));
+				}
+			}
+			return Right > -TNumericLimits<float>::Max() && Right < Left ? 0.5f * (Left + Right) : Left - 6.f;
+		};
+		const float X0 = FMath::Clamp(OffsetX + GapBefore(LoopStart) * Scale, 0.f, Size.X);
+		const float X1 = FMath::Clamp(OffsetX + GapBefore(LoopEnd) * Scale, 0.f, Size.X);
 		if (X1 > X0)
 		{
 			FSlateDrawElement::MakeBox(OutDrawElements, LayerId + 2,

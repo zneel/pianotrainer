@@ -210,7 +210,7 @@ TSharedRef<SWidget> SPianoApp::MakePractice()
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth()[Wood()]
-			+ SHorizontalBox::Slot().FillWidth(1.f)[SNew(SPianoRuler).Player(Player).Coach(Coach.Get())]
+			+ SHorizontalBox::Slot().FillWidth(1.f)[SAssignNew(Ruler, SPianoRuler).Player(Player).Coach(Coach.Get())]
 			+ SHorizontalBox::Slot().AutoWidth()[Wood()]
 		]
 		+ SVerticalBox::Slot().AutoHeight()

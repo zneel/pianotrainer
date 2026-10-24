@@ -19,6 +19,9 @@ class UPianoPlayer;
 //                        -coachsplit cuts a too-big section in half; -diary=<file> keeps the test's diary apart;
 //                        -coachhands=auto|separate|together (default auto); -autoerrorsuntil=<n>: mistakes only
 //                        among the first n notes
+//   -plantest=report|edit  make the score's practice plan (cut at phrases) and write its sections and phrase cues to
+//                        Saved/PianoLogs/plantest.json; edit also drives the ruler with mouse events (move an edge,
+//                        split, merge) and cuts the last section in half, recording the plan after each step
 //   -uishot=<s>          screenshot after s seconds (Saved/PianoLogs/ui.png), then quit; with -menupage=etudes|diary|library
 //                        and -sidebartab=practice|plan|visual to open on a page or tab
 UCLASS()
@@ -37,6 +40,7 @@ private:
 	void WriteAutotestReport(const TCHAR* Outcome);
 	void StartCoachTest();
 	void TickCoachTest();
+	void TickPlanTest();
 
 	UPROPERTY()
 	TObjectPtr<UPianoPlayer> Player;
@@ -65,4 +69,8 @@ private:
 	bool bCoachTest = false, bCoachGroups = false, bCoachSplit = false;
 	FString CoachPhases;
 	int32 CoachLastPhase = -1, CoachGroupPasses = 0, CoachSeenPass = 0, SectionsBeforeSplit = -1, SectionsAfterSplit = -1;
+	// -plantest: mode, step, frame counter, and the plan after each step
+	FString PlanTestMode;
+	int32 PlanTestStep = 0, PlanTestFrame = 0, PlanTestNextFrame = 10;
+	TSharedPtr<class FJsonObject> PlanTestResult;
 };

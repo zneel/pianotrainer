@@ -105,6 +105,7 @@ uint32 SPianoPlanPanel::Signature() const
 	for (const FPianoSection& S : Plan->Sections)
 	{
 		Hash = HashCombine(Hash, HashCombine(GetTypeHash(S.FirstBeat), HashCombine(GetTypeHash(uint8(S.Stage)), GetTypeHash(S.LastPractised))));
+		Hash = HashCombine(Hash, HashCombine(GetTypeHash(S.EndBeat), GetTypeHash(S.RepeatOf)));
 	}
 	return Hash;
 }
@@ -136,7 +137,7 @@ TSharedRef<SWidget> SPianoPlanPanel::MakeContent()
 		Box->AddSlot().AutoHeight()
 		[
 			SNew(STextBlock).Font(PianoStyle::Font(9)).ColorAndOpacity(PianoStyle::TextDim).AutoWrapText(true)
-			.Text(LOCTEXT("PlanIntro", "Learn the piece in small sections: two bars (one where it is dense), each played into the first beat of the next so they join up. Sessions alternate new sections and joins. The hardest section comes first. Each section: seven times to learn it (or cut it in half), then repeat it right, at most 20 minutes, and stop while it is perfect. Learned today, mastered when it is still perfect another day: each day starts by playing yesterday's sections cold."))
+			.Text(LOCTEXT("PlanIntro", "Learn the piece section by section, cut where its phrases begin - after rests and long notes, at slurs, fermatas, cadences, double bars and repeats - two to eight bars, smaller where it is dense. Each is played into the first beat of the next so they join up; a passage that comes back is learned once. Sessions alternate new sections and joins. The hardest section comes first. Each section: seven times to learn it (or cut it in half), then repeat it right, at most 20 minutes, and stop while it is perfect. Learned today, mastered when it is still perfect another day: each day starts by playing yesterday's sections cold."))
 		];
 		Box->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(FMargin(0.f, 10.f, 0.f, 0.f))
 		[
@@ -244,6 +245,11 @@ TSharedRef<SWidget> SPianoPlanPanel::MakeContent()
 	Box->AddSlot().AutoHeight()[MakeSession()];
 	Box->AddSlot().AutoHeight()[Separator()];
 	Box->AddSlot().AutoHeight()[SectionLabel(LOCTEXT("Sections", "SECTIONS"))];
+	Box->AddSlot().AutoHeight().Padding(FMargin(0.f, 0.f, 0.f, 6.f))
+	[
+		SNew(STextBlock).Font(PianoStyle::Font(8)).ColorAndOpacity(PianoStyle::TextFaint).AutoWrapText(true)
+		.Text(LOCTEXT("EditHint", "Cut where your phrases are: on the ruler, drag an edge to move it (onto the next edge to merge), double-click a section to split it at that bar."))
+	];
 	Box->AddSlot().AutoHeight()[MakeSections()];
 	return Box;
 }
@@ -405,12 +411,18 @@ TSharedRef<SWidget> SPianoPlanPanel::MakeSections()
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 					[
 						SNew(STextBlock).Font(PianoStyle::Font(8)).ColorAndOpacity(StageColor(S.Stage))
-						.Text(FText::Format(LOCTEXT("Row", "{0}{1}"), StageName(S.Stage), FText::FromString(Best)))
+						.Text(Plan->Sections.IsValidIndex(S.RepeatOf)
+							? FText::Format(LOCTEXT("RepeatRow", "comes back: {0}"), FText::FromString(Plan->Sections[S.RepeatOf].Label))
+							: FText::Format(LOCTEXT("Row", "{0}{1}"), StageName(S.Stage), FText::FromString(Best)))
 					]
 				]
 			]
 		];
 	}
+	List->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(FMargin(0.f, 8.f, 0.f, 0.f))
+	[
+		PianoUI::Button(LOCTEXT("Recut", "Cut again at phrases"), [this]() { if (Coach) { Coach->Recut(); } }, PianoUI::EButton::Ghost, false, true, 9)
+	];
 	return List;
 }
 

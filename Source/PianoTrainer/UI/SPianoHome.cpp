@@ -281,6 +281,10 @@ TSharedRef<SWidget> SPianoHome::MakeDiary()
 			const FPianoSection& S = Plan.Sections[I];
 			bAllMastered &= S.Stage >= EPianoStage::Mastered;
 			Latest = S.LastPractised > Latest ? S.LastPractised : Latest;
+			if (S.RepeatOf != INDEX_NONE)
+			{
+				continue; // a passage that comes back is due with its original
+			}
 			if (S.Stage == EPianoStage::Learned && !S.LearnedOn.IsEmpty() && S.LearnedOn <= WeekAgo)
 			{
 				// Bernhard never saw a right-sized section take more than seven days to master

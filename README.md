@@ -33,7 +33,9 @@ item to practise it. *Library*: the bundled samples and recent files. `Esc` togg
 
 **Practice screen.** Sheet music on top (two thirds of the window; all of it when the falling notes are off), the
 keyboard under it, the measure ruler (click a measure to jump, drag across measures to loop them; the plan's sections
-are drawn along its top: grey new, gold learned, green mastered) and the transport bar (piece and progress, measure
+run along its top - grey new, gold learned, green mastered, paler for a passage that comes back - and can be edited
+there: drag an edge to move it, onto the next edge to merge, double-click a section to split it at that bar) and the
+transport bar (piece and progress, measure
 counter, restart / measure back / play-pause / measure forward, speed knob, loop) at the bottom, and the sidebar:
 - *Plan tab* (the first): the practice plan (below).
 - *Practice tab:* mode (**Wait** for me / **Play along** / **Listen**), hand, my keys sound, input latency, count-in
@@ -57,12 +59,25 @@ Open a score with `Ctrl+O`, the menu, or by dropping a file on the window: `.mus
 Bernhard, a teacher on the Piano Street forum (2003-08), described a way of learning a piece in many posts; the
 app's Plan tab applies it (`docs/bernhard-method.md` collects the sources):
 
-- **Sections.** *Make a plan* cuts the piece into two-bar sections, one bar where the music is clearly denser than
-  the rest. Each section is practised with the first beat of the next bar, so that the sections join up.
+- **Sections at phrases.** Bernhard plans the chunks from the music's structure and lets the seven-times test decide
+  when one must be smaller. *Make a plan* reads the score (`FPianoPhrases`): every beat scores as a phrase start for
+  a rest in the melody before a new note, the melody's long last note (twice its neighbours, longer than what
+  follows; the melody is the top line of the right hand, above any inner voice), a slur or phrase mark a bar or
+  longer ending or starting, a fermata, a double bar or repeat sign, a cadence (the bass under that last note on the
+  tonic or dominant of the key), a passage that comes back note for note, a bar line (a little), and against cutting
+  through held notes. The cut is the cheapest path through the beats: sections of two to eight 4/4 bars (whatever
+  the metre), smaller where the music is dense (over 32 onsets), at the strongest starts. A passage that comes back
+  note for note is learned with its original (its single session is skipped, its progress follows). Each section
+  is practised with the first beat of what follows, so that the sections join up.
+- **Your phrases.** The plan is a draft: on the ruler, drag an edge between two sections to move it (it snaps to
+  bar lines), drag it onto the next edge to merge the two, double-click a section to split it at that bar. Sections
+  whose notes change start again as new. *Cut again at phrases* makes the plan afresh and keeps the progress of
+  every section that stays the same.
 - **Sessions.** New sections and joins alternate: 1, 2, 1–2, 3, 1–3, 4, 1–4, 5, 2–5, ... (a join spans at most four
   sections). The NEXT card starts the next one; any section can be started from the list.
 - **The seven-times test.** A session loops its section at tempo with a one-bar count-in. Not right once in seven
-  times? The section is too big: *Cut in half* splits it (down to a single beat) and starts again on the first half.
+  times? The section is too big: *Cut in half* splits it at the strongest phrase start near its middle (down to a
+  single beat) and starts again on the first half.
 - **Practice starts when you get it right.** After the first clean pass, play it right at least seven times and at
   least as often as it went wrong before. A mistake after it was right is fatigue: the coach says so.
 - **Hands separately, then together.** Technique is found with each hand alone (mistakes made hands together go
@@ -165,6 +180,14 @@ piece.
   `-autoerrorsuntil=N` keeps the autoplay's mistakes to its first N notes, `-diary=<file>` keeps the test's diary
   apart from yours. The battery runs learn → next-day check (the learned date moved back a day) → join → note-groups
   → stop when tired → too big + split → relearn after 40 days → hardest first, then the hands tests on a fresh diary.
+- `-plantest=report|edit` makes the score's plan in the diary given with `-diary=` and writes its sections and the
+  phrase cues (beat, strength, reasons) and slurs to `Saved/PianoLogs/plantest.json`; `edit` then edits the plan on
+  the ruler with real mouse events routed by Slate (drag the first edge to bar 4, double-click bar 11, drag that edge
+  back onto bar 9) and cuts the last section in half, recording the plan after each step. `tools/make_phrase_score.py`
+  writes the test score, `Scores/test_phrases.musicxml`, whose phrases are known: A (m. 1-4, slurred, ending on a
+  long note and a rest), A again (5-8), a figuration between repeat signs (9-12, played twice: 13-16), a phrase
+  ending on a fermata (17-18.3) and one starting on an upbeat (18.4-20). The coach tests start from a fixed plan for
+  Ode to Joy (m. 1-2, 3, 4-5, 6-7, 8) written by the battery.
 - `-uishot=<s>` saves a screenshot of whatever is on screen (the menu too) and quits; `-menupage=etudes|diary|library`
   and `-sidebartab=practice|plan|visual` open the app on that page or tab.
 - `tools/wav_clicks.py`, `wav_levels.py`, `wav_onsets.py` measure recordings; `tools/vrv_probe.py` runs a score
@@ -175,6 +198,10 @@ over 33 ms in any run):
 
 | Test | Outcome | Notes |
 |---|---|---|
+| `plan_phrases` | all PASS | made m. 1–4, 5–8 (= 1–4), 9–12, 13–16 (= 9–12), 17–18.3, 18.4–20; the ruler edits give 1–3 / 4–8, then 9–10 / 11–12, then 9–12 again; cut in half: 18.4–19 / 20 |
+| `plan_ode` | PASS | m. 1–4, 5–8 |
+| `plan_10_2` | report | 24 sections of 2 bars (one of 3), returning bars learned once (5–6, 9–10, 13–14, 40–41 = 1–2) |
+| `plan_10_3` | report | 23 sections of 0.75–2.5 4/4 bars (it is in 2/4); its slurs are short articulation, so it is cut at long notes and cadences |
 | `ode_wait` | finished | 45/45 hits, 0 wrong, 0 missed, timing error 9.4 ms |
 | `ode_drill_ls` / `ode_drill_acc` | finished | 45/45 each; the accent drill measured +48 velocity on the accents |
 | `ode_outline` | finished | 42/45: one note per beat, the rest silent |
@@ -206,7 +233,8 @@ docs/                        bernhard-method.md: the practice method the plan fo
 Plugins/PianoKit/
   Source/PianoKit/           FPianoScore (Verovio + lunasvg), FPianoSession, sequencer + sfizz MetaSound nodes,
                              UPianoPlayer (graph, sound, MIDI, feedback, drills, loop passes, async score loading),
-                             FPianoDrills, FPianoLibrary, FPianoPlan + FPianoDiary (practice plans and diary)
+                             FPianoDrills, FPianoLibrary, FPianoPhrases (phrase starts), FPianoPlan + FPianoDiary
+                             (practice plans and diary)
   Source/PianoKitEditor/     PianoAssetBuilder commandlet (materials for -keyboard3d)
   ThirdParty/                built libraries (not in git) + Salamander samples (fetched) and licence
 Source/PianoTrainer/
@@ -224,9 +252,13 @@ tools/                       fetch scripts, test battery, score generators, wav 
 - Not yet tested: a real MIDI keyboard and its pedal, and the macOS build.
 - The three Nouvelles Études are not included: no openly licensed machine-readable edition was found.
 - `.mscz` needs MuseScore Studio installed; plain `.mid` files are refused (no notation to engrave).
-- From `docs/bernhard-method.md` §4, not built yet: a dropping-notes join mode, a personal "seven" (Bernhard: 5-9 for most people), a
-  jump-up-and-back tempo ladder, a hidden-sheet memory pass, free-text diary notes with a "tomorrow" line, folding
-  repeated bars into one section, and a daily queue across pieces.
+- From `docs/bernhard-method.md` §4, not built yet: a dropping-notes join mode, a personal "seven" (Bernhard: 5-9 for
+  most people), a jump-up-and-back tempo ladder, a hidden-sheet memory pass, free-text diary notes with a "tomorrow"
+  line, and a daily queue across pieces.
+- Phrase finding reads what the score marks and how the melody moves; it is weakest where the melody shares a hand
+  with an accompaniment and the slurs are only articulation (Op. 10 No. 3). The ruler edits are the answer there.
+  Verovio plays repeats, so bar numbers in the plan follow the played timeline (a repeat's second time gets its own
+  numbers).
 
 ## Licences
 

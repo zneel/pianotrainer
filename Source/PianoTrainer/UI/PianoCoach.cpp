@@ -299,12 +299,61 @@ void FPianoCoach::Split()
 	}
 	const int32 Section = Session.First;
 	Finish(TEXT("too big: split"));
-	if (Plan->Split(Section))
+	if (Plan->Split(Section, *Player->GetScore()))
 	{
-		Plan->Relabel(*Player->GetScore());
+		Plan->Refresh(*Player->GetScore());
 		Diary.Save();
 	}
 	StartSection(Section);
+}
+
+bool FPianoCoach::EditPlan(TFunctionRef<bool(FPianoPlan&, const FPianoScore&)> Edit)
+{
+	const TSharedPtr<FPianoScore> Score = Player ? Player->GetScore() : nullptr;
+	if (!GetPlan() || !Score.IsValid())
+	{
+		return false;
+	}
+	if (Phase != ECoachPhase::Idle)
+	{
+		Stop(); // the sections are changing under it
+	}
+	FPianoPlan* Plan = GetPlan();
+	if (!Edit(*Plan, *Score))
+	{
+		return false;
+	}
+	Plan->Refresh(*Score);
+	Plan->NextSession = FMath::Clamp(Plan->NextSession, 0, FMath::Max(0, Plan->Schedule().Num() - 1));
+	Diary.Save();
+	return true;
+}
+
+bool FPianoCoach::MoveSectionEdge(int32 Left, int32 Beat)
+{
+	return EditPlan([Left, Beat](FPianoPlan& Plan, const FPianoScore&) { return Plan.MoveEdge(Left, Beat); });
+}
+
+bool FPianoCoach::SplitSectionAt(int32 Beat)
+{
+	return EditPlan([Beat](FPianoPlan& Plan, const FPianoScore&) { return Plan.SplitAt(Beat); });
+}
+
+bool FPianoCoach::MergeSections(int32 Left)
+{
+	return EditPlan([Left](FPianoPlan& Plan, const FPianoScore&) { return Plan.Merge(Left); });
+}
+
+bool FPianoCoach::Recut()
+{
+	return EditPlan([](FPianoPlan& Plan, const FPianoScore& Score)
+	{
+		FPianoPlan Again = FPianoPlan::Make(Score, Plan.Piece, Plan.Title);
+		Again.Created = Plan.Created;
+		Again.AdoptProgress(Plan);
+		Plan = MoveTemp(Again);
+		return true;
+	});
 }
 
 void FPianoCoach::Finish(const TCHAR* Result)
@@ -332,6 +381,7 @@ void FPianoCoach::Finish(const TCHAR* Result)
 		{
 			Diary.Log(Entry);
 		}
+		Plan->SyncRepeats(); // a passage that comes back is learned with this one
 		Diary.Save();
 		Player->Pause();
 		Player->ClearLoop();
@@ -410,6 +460,8 @@ void FPianoCoach::OnPass(bool bCleanPass)
 	{
 		return;
 	}
+	// a passage that comes back is learned as its original
+	const int32 Own = Plan->Sections.IsValidIndex(Plan->Sections[Session.First].RepeatOf) ? Plan->Sections[Session.First].RepeatOf : Session.First;
 	Dots.Add(int8((bCleanPass ? 1 : 0) | (uint8(Player->GetHands()) << 1)));
 	if (Dots.Num() > 18)
 	{
@@ -459,7 +511,7 @@ void FPianoCoach::OnPass(bool bCleanPass)
 	if (bCleanPass)
 	{
 		++Clean;
-		FPianoSection& First = Plan->Sections[Session.First];
+		FPianoSection& First = Plan->Sections[Own];
 		if (!Session.IsJoin())
 		{
 			First.BestTempo = FMath::Max(First.BestTempo, Pass.Tempo);
@@ -468,7 +520,7 @@ void FPianoCoach::OnPass(bool bCleanPass)
 
 	if (bColdCheck && Passes == 1)
 	{
-		FPianoSection& S = Plan->Sections[Session.First];
+		FPianoSection& S = Plan->Sections[Own];
 		if (bCleanPass)
 		{
 			S.Stage = EPianoStage::Mastered;
@@ -528,7 +580,7 @@ void FPianoCoach::OnPass(bool bCleanPass)
 		if (Clean >= Target)
 		{
 			// stop while it is perfect: the last repetition is the one that stays
-			FPianoSection& First = Plan->Sections[Session.First];
+			FPianoSection& First = Plan->Sections[Own];
 			if (!Session.IsJoin() && First.Stage == EPianoStage::New)
 			{
 				First.Stage = EPianoStage::Learned;

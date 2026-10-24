@@ -1,5 +1,6 @@
 #include "PianoPractice.h"
 
+#include "PianoPhrases.h"
 #include "PianoScore.h"
 
 #include "Algo/BinarySearch.h"
@@ -40,53 +41,167 @@ namespace PianoPracticeImpl
 
 FPianoPlan FPianoPlan::Make(const FPianoScore& Score, const FString& Piece, const FString& Title)
 {
-	using namespace PianoPracticeImpl;
 	FPianoPlan Plan;
 	Plan.Piece = Piece;
 	Plan.Title = Title;
 	Plan.Created = FPianoDiary::Today();
-	const TArray<double> Beats = Score.GetBeatTimes();
-	const int32 NumMeasures = Score.GetMeasures().Num();
-	if (Beats.Num() == 0 || NumMeasures == 0)
+	const FPianoPhrases Phrases = FPianoPhrases::Analyse(Score);
+	if (Phrases.NumBeats == 0)
 	{
 		return Plan;
 	}
-
-	// notes per second in each measure (both hands, struck notes)
-	TArray<float> Density;
-	Density.SetNumZeroed(NumMeasures);
-	for (const FPianoScoreNote& N : Score.GetNotes())
+	const TArray<int32> Bounds = Phrases.Segment();
+	for (int32 I = 0; I + 1 < Bounds.Num(); ++I)
 	{
-		if (N.IsStruck() && !N.bGrace)
-		{
-			Density[FMath::Clamp(Score.GetMeasureAt(N.OnMs), 0, NumMeasures - 1)] += 1.f;
-		}
-	}
-	for (int32 M = 0; M < NumMeasures; ++M)
-	{
-		Density[M] /= float(FMath::Max(0.25, (Score.GetMeasureEndMs(M) - Score.GetMeasureStartMs(M)) / 1000.0));
-	}
-	TArray<float> Sorted = Density;
-	Sorted.Sort();
-	// dense: in the top quarter and clearly busier than the median (in an even piece no bar stands out)
-	const float Dense = FMath::Max(Sorted[FMath::Min(Sorted.Num() - 1, Sorted.Num() * 3 / 4)], Sorted[Sorted.Num() / 2] * 1.25f + KINDA_SMALL_NUMBER);
-
-	for (int32 M = 0; M < NumMeasures;)
-	{
-		const bool bAlone = Density[M] >= Dense || M + 1 >= NumMeasures || Density[M + 1] >= Dense;
-		const int32 Count = bAlone ? 1 : 2;
 		FPianoSection& S = Plan.Sections.AddDefaulted_GetRef();
-		S.Difficulty = Count > 1 ? FMath::Max(Density[M], Density[M + 1]) : Density[M];
-		S.FirstBeat = BeatOf(Beats, Score.GetMeasureStartMs(M));
-		S.EndBeat = M + Count < NumMeasures ? BeatOf(Beats, Score.GetMeasureStartMs(M + Count)) : Beats.Num();
-		if (S.EndBeat <= S.FirstBeat)
-		{
-			S.EndBeat = FMath::Min(Beats.Num(), S.FirstBeat + 1);
-		}
-		M += Count;
+		S.FirstBeat = Bounds[I];
+		S.EndBeat = Bounds[I + 1];
 	}
-	Plan.Relabel(Score);
+	Plan.Refresh(Score);
 	return Plan;
+}
+
+void FPianoPlan::Refresh(const FPianoScore& Score)
+{
+	const FPianoPhrases Phrases = FPianoPhrases::Analyse(Score);
+	const TArray<FPianoScoreNote>& Notes = Score.GetNotes();
+	// the notes of each section, beat-relative (a copy has the same notes at the same places)
+	TArray<uint32> Signature;
+	for (FPianoSection& S : Sections)
+	{
+		const int32 First = FMath::Clamp(S.FirstBeat, 0, Phrases.NumBeats), End = FMath::Clamp(S.EndBeat, First, Phrases.NumBeats);
+		const double StartMs = Phrases.BeatMs.IsValidIndex(First) ? Phrases.BeatMs[First] : 0.0;
+		const double EndMs = Phrases.BeatMs.IsValidIndex(End) ? Phrases.BeatMs[End] : Score.GetLengthMs();
+		uint32 Hash = GetTypeHash(End - First);
+		bool bAny = false;
+		for (int32 N = Algo::LowerBoundBy(Notes, StartMs - 1.0, &FPianoScoreNote::OnMs); N < Notes.Num() && Notes[N].OnMs < EndMs - 1.0; ++N)
+		{
+			if (Notes[N].IsStruck() && !Notes[N].bGrace)
+			{
+				const int32 Beat = Phrases.BeatAt(Notes[N].OnMs);
+				const double Frac = (Notes[N].OnMs - Phrases.BeatMs[Beat]) / FMath::Max(1.0, Phrases.BeatMs[Beat + 1] - Phrases.BeatMs[Beat]);
+				Hash = HashCombine(Hash, HashCombine(GetTypeHash(FMath::RoundToInt32((Beat - First + Frac) * 48.0)), GetTypeHash(Notes[N].Pitch)));
+				bAny = true;
+			}
+		}
+		Signature.Add(bAny ? Hash : 0u);
+		S.Difficulty = float(Phrases.NumBeats > 0 ? Phrases.OnsetsIn(First, End) : 0) / float(FMath::Max(0.25, (EndMs - StartMs) / 1000.0));
+	}
+	for (int32 I = 0; I < Sections.Num(); ++I)
+	{
+		Sections[I].RepeatOf = INDEX_NONE;
+		for (int32 J = 0; J < I && Signature[I] != 0u; ++J)
+		{
+			if (Signature[J] == Signature[I] && Sections[J].RepeatOf == INDEX_NONE)
+			{
+				Sections[I].RepeatOf = J;
+				break;
+			}
+		}
+	}
+	SyncRepeats();
+	Relabel(Score);
+}
+
+void FPianoPlan::SyncRepeats()
+{
+	for (FPianoSection& S : Sections)
+	{
+		if (Sections.IsValidIndex(S.RepeatOf))
+		{
+			const FPianoSection& Original = Sections[S.RepeatOf];
+			S.Stage = Original.Stage;
+			S.LearnedOn = Original.LearnedOn;
+			S.MasteredOn = Original.MasteredOn;
+			S.Relearns = Original.Relearns;
+			S.BestTempo = FMath::Max(S.BestTempo, Original.BestTempo);
+		}
+	}
+}
+
+namespace PianoPracticeImpl
+{
+	static void ResetProgress(FPianoSection& S)
+	{
+		S.Stage = EPianoStage::New;
+		S.LearnedOn.Reset();
+		S.MasteredOn.Reset();
+		S.Sessions = 0;
+		S.Relearns = 0;
+		S.BestTempo = 0.f;
+		S.RepeatOf = INDEX_NONE;
+	}
+}
+
+bool FPianoPlan::MoveEdge(int32 Left, int32 Beat)
+{
+	using namespace PianoPracticeImpl;
+	if (!Sections.IsValidIndex(Left) || !Sections.IsValidIndex(Left + 1))
+	{
+		return false;
+	}
+	FPianoSection& A = Sections[Left];
+	FPianoSection& B = Sections[Left + 1];
+	if (Beat <= A.FirstBeat || Beat >= B.EndBeat)
+	{
+		return Merge(Left);
+	}
+	if (Beat == A.EndBeat)
+	{
+		return false;
+	}
+	A.EndBeat = B.FirstBeat = Beat;
+	ResetProgress(A);
+	ResetProgress(B);
+	return true;
+}
+
+bool FPianoPlan::SplitAt(int32 Beat)
+{
+	using namespace PianoPracticeImpl;
+	const int32 Index = Sections.IndexOfByPredicate([Beat](const FPianoSection& S) { return S.FirstBeat < Beat && Beat < S.EndBeat; });
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FPianoSection Second = Sections[Index];
+	Sections[Index].EndBeat = Beat;
+	Second.FirstBeat = Beat;
+	ResetProgress(Sections[Index]);
+	ResetProgress(Second);
+	Sections.Insert(Second, Index + 1);
+	return true;
+}
+
+bool FPianoPlan::Merge(int32 Left)
+{
+	using namespace PianoPracticeImpl;
+	if (!Sections.IsValidIndex(Left) || !Sections.IsValidIndex(Left + 1))
+	{
+		return false;
+	}
+	Sections[Left].EndBeat = Sections[Left + 1].EndBeat;
+	ResetProgress(Sections[Left]);
+	Sections.RemoveAt(Left + 1);
+	return true;
+}
+
+void FPianoPlan::AdoptProgress(const FPianoPlan& Old)
+{
+	for (FPianoSection& S : Sections)
+	{
+		if (const FPianoSection* Same = Old.Sections.FindByPredicate([&S](const FPianoSection& X) { return X.FirstBeat == S.FirstBeat && X.EndBeat == S.EndBeat; }))
+		{
+			S.Stage = Same->Stage;
+			S.LearnedOn = Same->LearnedOn;
+			S.MasteredOn = Same->MasteredOn;
+			S.LastPractised = Same->LastPractised;
+			S.Sessions = Same->Sessions;
+			S.Relearns = Same->Relearns;
+			S.BestTempo = Same->BestTempo;
+		}
+	}
+	NextSession = 0;
 }
 
 void FPianoPlan::Relabel(const FPianoScore& Score)
@@ -99,16 +214,20 @@ void FPianoPlan::Relabel(const FPianoScore& Score)
 
 int32 FPianoPlan::Hardest() const
 {
-	if (Sections.Num() < 3)
-	{
-		return INDEX_NONE;
-	}
+	// among the sections learned on their own (not the copies)
 	TArray<float> Sorted;
-	int32 Best = 0;
+	int32 Best = INDEX_NONE;
 	for (int32 I = 0; I < Sections.Num(); ++I)
 	{
-		Sorted.Add(Sections[I].Difficulty);
-		Best = Sections[I].Difficulty > Sections[Best].Difficulty ? I : Best;
+		if (Sections[I].RepeatOf == INDEX_NONE)
+		{
+			Sorted.Add(Sections[I].Difficulty);
+			Best = Best == INDEX_NONE || Sections[I].Difficulty > Sections[Best].Difficulty ? I : Best;
+		}
+	}
+	if (Sorted.Num() < 3)
+	{
+		return INDEX_NONE;
 	}
 	Sorted.Sort();
 	return Sections[Best].Difficulty > Sorted[Sorted.Num() / 2] * 1.5f ? Best : INDEX_NONE;
@@ -118,7 +237,7 @@ int32 FPianoPlan::DueReview(const FString& Today) const
 {
 	return Sections.IndexOfByPredicate([&Today](const FPianoSection& S)
 	{
-		return S.Stage == EPianoStage::Learned && !S.LearnedOn.IsEmpty() && S.LearnedOn < Today && S.LastPractised < Today;
+		return S.RepeatOf == INDEX_NONE && S.Stage == EPianoStage::Learned && !S.LearnedOn.IsEmpty() && S.LearnedOn < Today && S.LastPractised < Today;
 	});
 }
 
@@ -134,7 +253,7 @@ TArray<FPianoPlanSession> FPianoPlan::Schedule() const
 	}
 	for (int32 I = 0; I < Sections.Num(); ++I)
 	{
-		if (I != Hard)
+		if (I != Hard && Sections[I].RepeatOf == INDEX_NONE) // a copy is learned with its original
 		{
 			Out.Add({ I, I });
 		}
@@ -146,22 +265,15 @@ TArray<FPianoPlanSession> FPianoPlan::Schedule() const
 	return Out;
 }
 
-bool FPianoPlan::Split(int32 Section)
+bool FPianoPlan::Split(int32 Section, const FPianoScore& Score)
 {
 	if (!Sections.IsValidIndex(Section) || Sections[Section].EndBeat - Sections[Section].FirstBeat < 2)
 	{
 		return false;
 	}
-	FPianoSection Second = Sections[Section];
-	const int32 Mid = (Sections[Section].FirstBeat + Sections[Section].EndBeat) / 2;
-	Sections[Section].EndBeat = Mid;
-	Second.FirstBeat = Mid;
-	Second.Stage = EPianoStage::New;
-	Second.LearnedOn.Reset();
-	Second.MasteredOn.Reset();
-	Sections[Section].Stage = EPianoStage::New;
-	Sections.Insert(Second, Section + 1);
-	return true;
+	const FPianoSection& S = Sections[Section];
+	const int32 At = FPianoPhrases::Analyse(Score).BestSplit(S.FirstBeat, S.EndBeat);
+	return SplitAt(At != INDEX_NONE ? At : (S.FirstBeat + S.EndBeat) / 2);
 }
 
 void FPianoPlan::GetTimes(const FPianoScore& Score, const FPianoPlanSession& Session, double& OutStartMs, double& OutEndMs, double& OutOverlapEndMs) const
@@ -191,8 +303,14 @@ FString FPianoPlan::Describe(const FPianoScore& Score, const FPianoPlanSession& 
 	const int32 M0 = MeasureOf(First), M1 = MeasureOf(Last);
 	const bool bStartsAtBar = First == StartOfMeasure(M0);
 	const bool bEndsAtBar = Last + 1 >= Beats.Num() || Last + 1 == StartOfMeasure(MeasureOf(Last + 1));
-	const FString From = bStartsAtBar ? FString::FromInt(M0 + 1) : FString::Printf(TEXT("%d.%d"), M0 + 1, First - StartOfMeasure(M0) + 1);
-	const FString To = bEndsAtBar ? FString::FromInt(M1 + 1) : FString::Printf(TEXT("%d.%d"), M1 + 1, Last - StartOfMeasure(M1) + 1);
+	FString From = bStartsAtBar ? FString::FromInt(M0 + 1) : FString::Printf(TEXT("%d.%d"), M0 + 1, First - StartOfMeasure(M0) + 1);
+	FString To = bEndsAtBar ? FString::FromInt(M1 + 1) : FString::Printf(TEXT("%d.%d"), M1 + 1, Last - StartOfMeasure(M1) + 1);
+	if (M0 == M1 && !(bStartsAtBar && bEndsAtBar))
+	{
+		// inside one bar: "42.4", "42.1–42.3"
+		From = FString::Printf(TEXT("%d.%d"), M0 + 1, First - StartOfMeasure(M0) + 1);
+		To = FString::Printf(TEXT("%d.%d"), M1 + 1, Last - StartOfMeasure(M1) + 1);
+	}
 	const FString Range = From == To ? FString::Printf(TEXT("m. %s"), *From) : FString::Printf(TEXT("m. %s–%s"), *From, *To);
 	return Session.IsJoin() ? FString::Printf(TEXT("join %s"), *Range) : Range;
 }
@@ -252,6 +370,9 @@ void FPianoDiary::Load()
 			S->TryGetNumberField(TEXT("difficulty"), Difficulty);
 			X.Difficulty = float(Difficulty);
 			X.Label = S->GetStringField(TEXT("label"));
+			double RepeatOf = -1.0;
+			S->TryGetNumberField(TEXT("repeatOf"), RepeatOf);
+			X.RepeatOf = int32(RepeatOf);
 		}
 	}
 	Entries.Reset();
@@ -297,6 +418,7 @@ void FPianoDiary::Save() const
 			S->SetNumberField(TEXT("best"), FMath::RoundToInt32(X.BestTempo * 100.f) / 100.0);
 			S->SetNumberField(TEXT("difficulty"), FMath::RoundToInt32(X.Difficulty * 100.f) / 100.0);
 			S->SetStringField(TEXT("label"), X.Label);
+			S->SetNumberField(TEXT("repeatOf"), X.RepeatOf);
 			Sections.Add(MakeShared<FJsonValueObject>(S));
 		}
 		O->SetArrayField(TEXT("sections"), Sections);
